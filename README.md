@@ -48,13 +48,15 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
 
 ## Build and install
 
-1. Clone this repository:
+1. Get this repository. It's private, so first accept the GitHub invite. Then either:
+   - **Download the ZIP:** on the repository page, click Code → Download ZIP, then unzip it.
+   - **Clone it with the [GitHub CLI](https://cli.github.com):**
 
-   ```sh
-   git clone https://github.com/FlyingViet/sts2-ios-launch.git
-   cd sts2-ios-launch
-   ```
+     ```sh
+     gh repo clone FlyingViet/sts2-ios-launch
+     ```
 
+   Open Terminal in that folder (`cd ~/Downloads/sts2-ios-launch-main`, or wherever it is).
 2. In Xcode 26, go to Settings → Accounts and add your Apple ID.
 3. Connect your iPhone or iPad by cable, unlock it, and tap **Trust** if asked.
 4. Build and install:
@@ -101,6 +103,9 @@ Built with Xcode 26, the same app runs fine on iOS 27.
 ## Troubleshooting
 
 - **Build logs** are in `build/logs/`. The script prints the end of the log for whichever step failed.
+- **"Permission denied" running `./build.sh`:** run `bash build.sh …` instead.
+- **Folder path with a space in it:** the build goes to `~/Library/Caches/sts2-ios-launch` instead of
+  `build/`, because .NET's iOS linker can't handle spaces in paths. The script prints where the result is.
 - **"patching sts2.dll failed":** your game version differs from the one this was made for. Switch Slay the
   Spire 2 to Steam's public branch (Properties → Betas → None), let it update, and copy the files again.
 - **Signing or provisioning errors:** check your Apple ID is in Xcode 26 → Settings → Accounts, and that your
