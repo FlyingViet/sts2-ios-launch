@@ -29,6 +29,37 @@ void Stub(string typeName, string methodName, Action<ILProcessor> emit)
 	}
 }
 
+// Copies a static method (no exception handlers) under a new name in the same type.
+MethodDefinition CloneStatic(MethodDefinition m, string name)
+{
+	if (!m.IsStatic || m.Body.HasExceptionHandlers) throw new Exception($"can't clone {m.FullName}");
+	var c = new MethodDefinition(name, m.Attributes, m.ReturnType);
+	foreach (var p in m.Parameters) c.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, p.ParameterType));
+	foreach (var v in m.Body.Variables) c.Body.Variables.Add(new VariableDefinition(v.VariableType));
+	c.Body.InitLocals = m.Body.InitLocals;
+	var map = new Dictionary<Instruction, Instruction>();
+	foreach (var ins in m.Body.Instructions)
+	{
+		var n = Instruction.Create(OpCodes.Nop);
+		n.OpCode = ins.OpCode;
+		n.Operand = ins.Operand switch
+		{
+			ParameterDefinition pd => c.Parameters[pd.Index],
+			VariableDefinition vd => c.Body.Variables[vd.Index],
+			_ => ins.Operand,
+		};
+		map[ins] = n;
+		c.Body.Instructions.Add(n);
+	}
+	foreach (var n in c.Body.Instructions)
+	{
+		if (n.Operand is Instruction target) n.Operand = map[target];
+		else if (n.Operand is Instruction[] targets) n.Operand = targets.Select(t => map[t]).ToArray();
+	}
+	m.DeclaringType.Methods.Add(c);
+	return c;
+}
+
 if (asm.Name.Name == "GodotSharp")
 {
 	// Every engine warning/error captures a C# backtrace (very slow under NativeAOT) -> skip it.
@@ -37,6 +68,64 @@ if (asm.Name.Name == "GodotSharp")
 	Stub("Godot.Input", "SetMouseMode", il => il.Emit(OpCodes.Ret));
 	Stub("Godot.Input", "GetMouseMode", il => { il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ret); }); // Visible
 	Stub("Godot.Input", "SetCustomMouseCursor", il => il.Emit(OpCodes.Ret));
+
+	// Engine.MaxFps: the game's FPS limit. On iOS, Metal enforces it by holding frames back at presentation while
+	// the display link keeps running the game loop at 120 Hz, which paces frames unevenly. Remember what the game
+	// asks for and let the port apply it (src/native/Port/PortFrameRate.cs: display link rate instead).
+	{
+		var engine = module.GetType("Godot.Engine") ?? throw new Exception("type Godot.Engine not found");
+		var corlib = module.TypeSystem.CoreLibrary;
+		var actionOpen = new TypeReference("System", "Action`1", module, corlib);
+		actionOpen.GenericParameters.Add(new GenericParameter(actionOpen));
+		var actionInt = new GenericInstanceType(actionOpen);
+		actionInt.GenericArguments.Add(module.TypeSystem.Int32);
+		var invoke = new MethodReference("Invoke", module.TypeSystem.Void, actionInt) { HasThis = true };
+		invoke.Parameters.Add(new ParameterDefinition(actionOpen.GenericParameters[0]));
+		FieldDefinition Field(string name, TypeReference type)
+		{
+			var f = new FieldDefinition(name, FieldAttributes.Public | FieldAttributes.Static, type);
+			engine.Fields.Add(f);
+			return f;
+		}
+		var hook = Field("PortMaxFpsHook", actionInt);
+		var requested = Field("PortRequestedMaxFps", module.TypeSystem.Int32);
+		var hasRequest = Field("PortHasMaxFpsRequest", module.TypeSystem.Boolean);
+		var setNative = CloneStatic(Method("Godot.Engine", "SetMaxFps"), "PortSetMaxFpsNative");
+		var getNative = CloneStatic(Method("Godot.Engine", "GetMaxFps"), "PortGetMaxFpsNative");
+
+		var set = Method("Godot.Engine", "SetMaxFps");
+		set.Body = new MethodBody(set);
+		var il = set.Body.GetILProcessor();
+		var native = il.Create(OpCodes.Ldarg_0);
+		il.Emit(OpCodes.Ldarg_0);
+		il.Emit(OpCodes.Stsfld, requested);
+		il.Emit(OpCodes.Ldc_I4_1);
+		il.Emit(OpCodes.Stsfld, hasRequest);
+		il.Emit(OpCodes.Ldsfld, hook);
+		il.Emit(OpCodes.Brfalse, native);
+		il.Emit(OpCodes.Ldsfld, hook);
+		il.Emit(OpCodes.Ldarg_0);
+		il.Emit(OpCodes.Callvirt, invoke);
+		il.Emit(OpCodes.Ret);
+		il.Append(native);
+		il.Emit(OpCodes.Call, setNative);
+		il.Emit(OpCodes.Ret);
+		patched++;
+		Console.WriteLine("Engine.SetMaxFps records the request and calls PortMaxFpsHook");
+
+		var get = Method("Godot.Engine", "GetMaxFps");
+		get.Body = new MethodBody(get);
+		il = get.Body.GetILProcessor();
+		var fromNative = il.Create(OpCodes.Call, getNative);
+		il.Emit(OpCodes.Ldsfld, hasRequest);
+		il.Emit(OpCodes.Brfalse, fromNative);
+		il.Emit(OpCodes.Ldsfld, requested);
+		il.Emit(OpCodes.Ret);
+		il.Append(fromNative);
+		il.Emit(OpCodes.Ret);
+		patched++;
+		Console.WriteLine("Engine.GetMaxFps returns the game's requested limit");
+	}
 }
 else if (asm.Name.Name == "sts2")
 {
