@@ -58,10 +58,19 @@ static unsafe class PortPerf
 			" vsync=", DisplayServer.WindowGetVsyncMode(), " physicsTps=", Engine.PhysicsTicksPerSecond,
 			" serverGC=", GCSettings.IsServerGC, " latency=", GCSettings.LatencyMode,
 			" concurrent=", AppContext.TryGetSwitch("System.GC.Concurrent", out bool c) ? c.ToString() : "default");
+		GD.Print("[PORT] FMOD file system: ", FmodFileSystemStatus());
 		_g0 = GC.CollectionCount(0); _g1 = GC.CollectionCount(1); _g2 = GC.CollectionCount(2);
 		_pause = GC.GetTotalPauseDuration(); _pipe = Pipelines();
 		_lastMs = _windowStartMs = Clock.Elapsed.TotalMilliseconds;
 		tree.ProcessFrame += OnFrame;
+	}
+
+	// Set by load_all_fmod_plugins in src/ios/fmod_plugins_stub.cpp (compiled into the app executable).
+	static string FmodFileSystemStatus()
+	{
+		if (!NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "port_fmod_file_system_status", out IntPtr fn))
+			return "unknown (status export missing)";
+		return Marshal.PtrToStringUTF8(((delegate* unmanaged<IntPtr>)fn)()) ?? "unknown";
 	}
 
 	static void OnFrame()
