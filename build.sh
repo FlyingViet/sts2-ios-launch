@@ -383,7 +383,15 @@ for d in devices:
 		[[ -n "$DEVICE" ]] || die "no paired iPhone/iPad found: connect it by cable, unlock it and tap Trust"
 	fi
 	step "Installing on $DEVICE"
-	run install "${DC[@]}" device install app --device "$DEVICE" "$APP"
+	# Wi-Fi connections to the device sometimes drop during the 2 GB copy; retry a couple of times.
+	for attempt in 1 2 3; do
+		if run_ok install "${DC[@]}" device install app --device "$DEVICE" "$APP"; then break; fi
+		if [[ $attempt -eq 3 ]]; then
+			tail -n 20 "$LOGS/install.log" >&2
+			die "install failed: keep the device unlocked and nearby (a cable is most reliable), then run this again"
+		fi
+		echo "    (install interrupted; retrying)"; sleep 15
+	done
 	echo "Installed. First launch: if iOS says the developer isn't trusted, go to Settings > General >"
 	echo "VPN & Device Management and trust your Apple ID."
 fi
