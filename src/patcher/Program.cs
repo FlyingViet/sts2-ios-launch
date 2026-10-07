@@ -190,6 +190,10 @@ else if (asm.Name.Name == "sts2")
 	patched++;
 	Console.WriteLine("GameStartup waits for cloud sync without Steamworks");
 
+	// PrewarmJit reflects over every packet type to RuntimeHelpers.PrepareMethod them: pointless (and ~30 ms at
+	// startup) when the whole game is compiled ahead of time.
+	Stub("MegaCrit.Sts2.Core.Helpers.OneTimeInitialization", "PrewarmJit", il => il.Emit(OpCodes.Ret));
+
 	// Saves made on PC are tagged with the Steam platform; answer those lookups without Steamworks.
 	Stub("MegaCrit.Sts2.Core.Platform.Steam.SteamPlatformUtilStrategy", "GetLocalPlayerId", il =>
 	{
