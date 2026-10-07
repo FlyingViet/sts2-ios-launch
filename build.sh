@@ -279,7 +279,8 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 		-c "Add :godot_cmdline:1 string --log-file" -c "Add :godot_cmdline:2 string user://godot.log" \
 		-c "Add :NSLocalNetworkUsageDescription string Slay the Spire 2 uses your local network to host and join multiplayer games." \
 		"$X/sts2/sts2-Info.plist"
-	# fmod-gdextension's iOS export plugin doesn't register its plugin loader under Godot 4.5.
+	# fmod-gdextension's iOS export plugin doesn't generate its plugin loader under Godot 4.5. Ours also swaps the
+	# extension's racy async file callbacks for blocking reads from the pck (see the file).
 	cat "$ROOT/src/ios/fmod_plugins_stub.cpp" >> "$X/sts2/dummy.cpp"
 	mark_done export "$FP"
 fi
