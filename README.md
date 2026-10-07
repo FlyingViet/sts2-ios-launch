@@ -66,8 +66,8 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
    ./build.sh --game "/path/to/Slay the Spire 2" --install   # game folder copied from a PC
    ```
 
-   The first build downloads about 2 GB of tools into `build/` and takes 15–30 minutes. Later builds only redo
-   what changed and are much faster.
+   The first build downloads about 2 GB of tools into `build/` and takes roughly 5–15 minutes, depending on
+   your connection and Mac. Later builds only redo what changed.
 5. The first time you open the app, iOS may say the developer isn't trusted. Go to Settings → General → VPN &
    Device Management, tap your Apple ID, and trust it.
 6. Open the app and sign in to Steam to sync your saves, or skip that step.
