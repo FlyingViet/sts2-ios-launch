@@ -11,6 +11,8 @@ SPINE_VERSION="4.2"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
+# .NET's iOS linker step breaks on paths with spaces, so build elsewhere if this folder's path has one.
+if [[ "$BUILD" == *" "* ]]; then BUILD="$HOME/Library/Caches/sts2-ios-launch"; fi
 TOOLS="$BUILD/tools"
 WORK="$BUILD/work"
 LOGS="$BUILD/logs"
@@ -29,10 +31,15 @@ Usage: ./build.sh --game <folder> [options]
   --xcode <path>      Xcode 26 app to build with (default: searched in /Applications and ~/Downloads).
   --icon game         Use the game's own pixel-art icon instead of rendering the Ironclad close-up.
   --clean             Delete build/work first (downloaded tools are kept).
+
+Everything goes in build/ (or ~/Library/Caches/sts2-ios-launch if this folder's path contains a space).
 EOF
 }
 
 die() { echo "error: $*" >&2; exit 1; }
+[[ "$BUILD" != *" "* ]] || die "the build folder can't have spaces in its path: $BUILD"
+# Paths inside the repo are shown relative to it.
+show() { local p="${1#$ROOT/}"; echo "$p"; }
 step() { echo "==> $*"; }
 
 GAME_DIR="${STS2_GAME_DIR:-}"; TEAM=""; UNSIGNED=0; INSTALL=0; DEVICE=""; BUNDLE_ID=""; XCODE_APP="${XCODE_APP:-}"
@@ -61,9 +68,9 @@ run_ok() { local name="$1"; shift; "$@" > "$LOGS/$name.log" 2>&1; }
 run() {
 	local name="$1"; shift
 	if ! run_ok "$name" "$@"; then
-		echo "---- last lines of build/logs/$name.log ----" >&2
+		echo "---- last lines of $(show "$LOGS/$name.log") ----" >&2
 		tail -n 40 "$LOGS/$name.log" >&2
-		die "$name failed (full log: build/logs/$name.log)"
+		die "$name failed (full log: $(show "$LOGS/$name.log"))"
 	fi
 }
 
@@ -237,7 +244,7 @@ if ! up_to_date icon "$FP" || [[ ! -f "$WORK/icon.png" ]]; then
 			&& [[ -f "$WORK/icon.png" ]]; then
 			:
 		else
-			echo "    (couldn't render the Ironclad icon; using the game's own icon. Details in build/logs/icon-*.log)"
+			echo "    (couldn't render the Ironclad icon; using the game's own icon. Details in $(show "$LOGS")/icon-*.log)"
 			rm -f "$WORK/icon.png"
 		fi
 	fi
@@ -266,7 +273,7 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	(cd "$P" && "$GODOT" --headless --path . --import > "$LOGS/godot-import.log" 2>&1) || true
 	rm -rf "$X" && mkdir -p "$X"
 	(cd "$P" && run godot-export "$GODOT" --headless --path . --export-release iOS "$X/sts2.ipa")
-	[[ -d "$X/sts2.xcodeproj" ]] || die "Godot export produced no Xcode project (see build/logs/godot-export.log)"
+	[[ -d "$X/sts2.xcodeproj" ]] || die "Godot export produced no Xcode project (see $(show "$LOGS/godot-export.log"))"
 	sed -i '' 's/"Apple Distribution"/"Apple Development"/g' "$X/sts2.xcodeproj/project.pbxproj"
 	/usr/libexec/PlistBuddy -c "Add :godot_cmdline array" -c "Add :godot_cmdline:0 string --force-steam=off" \
 		-c "Add :godot_cmdline:1 string --log-file" -c "Add :godot_cmdline:2 string user://godot.log" \
@@ -300,7 +307,7 @@ if ! up_to_date native "$FP" || [[ ! -f "$WORK/native-out/sts2native.dylib" ]]; 
 	rm -rf "$WORK/native" "$WORK/native-out" && cp -R "$ROOT/src/native" "$WORK/native"
 	(cd "$WORK/native" && run native-publish dotnet publish -c Release -o "$WORK/native-out" \
 		-p:GameDataDir="$WORK/game-data" -p:PatchedDir="$WORK/patched" -p:IosSdkPath="$IOS_SDK")
-	[[ -f "$WORK/native-out/sts2native.dylib" ]] || die "NativeAOT produced no library (see build/logs/native-publish.log)"
+	[[ -f "$WORK/native-out/sts2native.dylib" ]] || die "NativeAOT produced no library (see $(show "$LOGS/native-publish.log"))"
 	mark_done native "$FP"
 fi
 cp "$WORK/native-out/sts2native.dylib" "$FRAMEWORK/sts2"
@@ -315,7 +322,7 @@ if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 	while IFS= read -r f; do PF+=("--patch-file=$f=res://${f#$ROOT/src/pck/}"); done < <(find "$ROOT/src/pck" -type f ! -name '.DS_Store')
 	rm -f "$WORK/sts2.pck"
 	run pck-patch "$GDRE" --headless --pck-patch="$PCK" --output="$WORK/sts2.pck" "${PF[@]}"
-	[[ -f "$WORK/sts2.pck" ]] || die "pck patch produced no file (see build/logs/pck-patch.log)"
+	[[ -f "$WORK/sts2.pck" ]] || die "pck patch produced no file (see $(show "$LOGS/pck-patch.log"))"
 	mark_done pck "$FP"
 fi
 rm -f "$X/sts2.pck" && cp -c "$WORK/sts2.pck" "$X/sts2.pck" 2>/dev/null || cp "$WORK/sts2.pck" "$X/sts2.pck"
@@ -335,14 +342,14 @@ else
 			/usr/libexec/PlistBuddy -c "Delete :com.apple.developer.kernel.increased-memory-limit" "$X/sts2/sts2.entitlements" || true
 			run xcodebuild "${XB[@]}"
 		else
-			echo "---- last lines of build/logs/xcodebuild.log ----" >&2; grep -E "error:|BUILD FAILED" "$LOGS/xcodebuild.log" | tail -n 20 >&2
+			echo "---- errors from $(show "$LOGS/xcodebuild.log") ----" >&2; grep -E "error:|BUILD FAILED" "$LOGS/xcodebuild.log" | tail -n 20 >&2
 			die "Xcode build failed. If it's about provisioning: connect your iPhone/iPad by cable, unlock it, and
        make sure your Apple ID is in Xcode > Settings > Accounts"
 		fi
 	fi
 fi
 APP="$WORK/derived/Build/Products/Release-iphoneos/sts2.app"
-[[ -d "$APP" ]] || die "no app built (see build/logs/xcodebuild.log)"
+[[ -d "$APP" ]] || die "no app built (see $(show "$LOGS/xcodebuild.log"))"
 
 if [[ $UNSIGNED -eq 1 ]]; then
 	step "Packaging the .ipa"
@@ -351,13 +358,13 @@ if [[ $UNSIGNED -eq 1 ]]; then
 	(cd "$WORK/ipa" && run ipa zip -qr -1 "$BUILD/SlayTheSpire2.ipa" Payload)
 	rm -rf "$WORK/ipa"
 	echo
-	echo "Done: build/SlayTheSpire2.ipa"
+	echo "Done: $(show "$BUILD/SlayTheSpire2.ipa")"
 	echo "Install it with Sideloadly or AltStore (see README). It's built from your copy of the game: keep it to yourself."
 	exit 0
 fi
 
 echo
-echo "Done: $APP"
+echo "Done: $(show "$APP")"
 if [[ $INSTALL -eq 1 ]]; then
 	# Prefer the default (newest) Xcode's devicectl: it supports the newest iOS versions.
 	DC=(env -u DEVELOPER_DIR xcrun devicectl)
