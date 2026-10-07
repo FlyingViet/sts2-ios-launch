@@ -48,12 +48,12 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
 
 ## Build and install
 
-1. Get this repository. It's private, so first accept the GitHub invite. Then either:
-   - **Download the ZIP:** on the repository page, click Code → Download ZIP, then unzip it.
-   - **Clone it with the [GitHub CLI](https://cli.github.com):**
+1. Get this repository. Either:
+   - **Download the ZIP:** click Code → Download ZIP on this page, then unzip it.
+   - **Clone it:**
 
      ```sh
-     gh repo clone FlyingViet/sts2-ios-launch
+     git clone https://github.com/FlyingViet/sts2-ios-launch.git
      ```
 
    Open Terminal in that folder (`cd ~/Downloads/sts2-ios-launch-main`, or wherever it is).
