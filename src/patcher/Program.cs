@@ -313,6 +313,72 @@ else if (asm.Name.Name == "sts2")
 		patched++;
 		Console.WriteLine("error popups always offer OK");
 	}
+
+	// ---- port content (src/native/Port/PerfectedDeck.cs) ----
+	// Called once models and localization are loaded, before any save is read: register extra models there.
+	var actionOpen0 = new TypeReference("System", "Action", module, runtime);
+	var afterEssential = Field("AfterEssentialInit", actionOpen0);
+	{
+		var m = Method("MegaCrit.Sts2.Core.Helpers.OneTimeInitialization", "ExecuteEssential");
+		var invoke = new MethodReference("Invoke", module.TypeSystem.Void, actionOpen0) { HasThis = true };
+		var il = m.Body.GetILProcessor();
+		// Turn every "ret" into "if (hook != null) hook(); ret" (the ret stays the branch target).
+		foreach (var ret in m.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+		{
+			var newRet = il.Create(OpCodes.Ret);
+			ret.OpCode = OpCodes.Ldsfld;
+			ret.Operand = afterEssential;
+			il.InsertAfter(ret, newRet);
+			il.InsertBefore(newRet, il.Create(OpCodes.Brfalse, newRet));
+			il.InsertBefore(newRet, il.Create(OpCodes.Ldsfld, afterEssential));
+			il.InsertBefore(newRet, il.Create(OpCodes.Callvirt, invoke));
+		}
+		patched++;
+		Console.WriteLine("OneTimeInitialization.ExecuteEssential calls PortHooks.AfterEssentialInit");
+	}
+
+	// The custom run screen lists ModelDb.GoodModifiers then BadModifiers (the Daily run draws from the same lists, so
+	// those stay untouched): let the port append to the list this screen shows (applied in list order).
+	{
+		var modelDb = module.GetType("MegaCrit.Sts2.Core.Models.ModelDb");
+		var badGetter = modelDb.Methods.Single(m => m.Name == "get_BadModifiers");
+		var listType = badGetter.ReturnType;
+		var funcList = Generic("Func", listType, listType);
+		var listHook = Field("CustomRunModifiers", funcList);
+		var wrapper = new MethodDefinition("CustomRunBadModifiers", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, listType);
+		hooks.Methods.Add(wrapper);
+		var il = wrapper.Body.GetILProcessor();
+		var plain = il.Create(OpCodes.Call, badGetter);
+		il.Emit(OpCodes.Ldsfld, listHook);
+		il.Emit(OpCodes.Brfalse, plain);
+		il.Emit(OpCodes.Ldsfld, listHook);
+		il.Emit(OpCodes.Call, badGetter);
+		il.Emit(OpCodes.Callvirt, Invoke(funcList, true));
+		il.Emit(OpCodes.Ret);
+		il.Append(plain);
+		il.Emit(OpCodes.Ret);
+		var listUi = module.GetType("MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NCustomRunModifiersList");
+		int calls = 0;
+		foreach (var t in new[] { listUi }.Concat(listUi.NestedTypes))
+			foreach (var m in t.Methods.Where(m => m.HasBody))
+				foreach (var ins in m.Body.Instructions)
+					if (ins.OpCode == OpCodes.Call && ins.Operand is MethodReference r && r.Name == "get_BadModifiers" && r.DeclaringType.Name == "ModelDb")
+					{
+						ins.Operand = wrapper;
+						calls++;
+					}
+		if (calls == 0) throw new Exception("NCustomRunModifiersList no longer reads ModelDb.BadModifiers");
+		patched++;
+		Console.WriteLine($"custom run modifier list goes through PortHooks.CustomRunModifiers ({calls} call sites)");
+
+		// Lets the port hide its modifiers when the screen is used for multiplayer (other players wouldn't know them).
+		var init = listUi.Methods.Single(m => m.Name == "Initialize" && m.Parameters.Count == 1);
+		var actionInit = Generic("Action", listUi, init.Parameters[0].ParameterType);
+		var initHook = Field("CustomRunModifiersInitialize", actionInit);
+		Guard(init, initHook,
+			Instruction.Create(OpCodes.Ldsfld, initHook), Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ldarg_1),
+			Instruction.Create(OpCodes.Callvirt, Invoke(actionInit, false)));
+	}
 }
 else
 {
