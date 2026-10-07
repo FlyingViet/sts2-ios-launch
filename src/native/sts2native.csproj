@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    NativeAOT build of the game's own sts2.dll (IL-patched by src/patcher) plus this port's code, as the iOS
+    library that replaces the Godot template's C# placeholder. Set by build.sh:
+      GameDataDir  folder with the game's managed DLLs (data_sts2_*)
+      PatchedDir   folder with patched GodotSharp.dll + sts2.dll
+      IosSdkPath   iPhoneOS.sdk of the Xcode used for the app build
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>sts2native</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
+    <UseNativeAOTRuntime>true</UseNativeAOTRuntime>
+    <NativeLib>Shared</NativeLib>
+    <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <LinkStandardCPlusPlusLibrary>true</LinkStandardCPlusPlusLibrary>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <NoWarn>$(NoWarn);IL2026;IL2111;IL2075;IL2070;IL3050;IL2080;IL2067;IL2072;IL2055;IL2060;IL3000;IL2057;IL2073;IL2062;IL2059</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Every game DLL must be referenced: ILC silently stubs missing ones, which then fail at runtime. -->
+    <Reference Include="$(GameDataDir)/*.dll" Exclude="$(GameDataDir)/GodotSharp.dll;$(GameDataDir)/sts2.dll" />
+    <Reference Include="$(PatchedDir)/GodotSharp.dll" />
+    <Reference Include="$(PatchedDir)/sts2.dll" />
+    <TrimmerRootAssembly Include="sts2" />
+    <TrimmerRootAssembly Include="sts2native" />
+    <TrimmerRootAssembly Include="GodotSharp" />
+    <TrimmerRootAssembly Include="SmartFormat" />
+    <TrimmerRootAssembly Include="SmartFormat.ZString" />
+    <UnmanagedEntryPointsAssembly Include="sts2" />
+    <LinkerArg Include="-install_name '@rpath/sts2.framework/sts2'" />
+    <LinkerArg Include="-miphoneos-version-min=12.0 -isysroot &quot;$(IosSdkPath)&quot;" />
+  </ItemGroup>
+</Project>

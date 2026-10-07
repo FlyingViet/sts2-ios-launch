@@ -1,0 +1,10 @@
+config_version=5
+
+[application]
+
+config/name="iconrender"
+
+[display]
+
+window/size/viewport_width=640
+window/size/viewport_height=360
