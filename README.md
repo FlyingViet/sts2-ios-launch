@@ -19,6 +19,10 @@ endorsed by Mega Crit.
 - **Steam Cloud saves.** Sign in with Steam on first launch (Steam Guard supported) and your progress syncs
   with your PC. Sync happens at startup and in the background while you play. A **Steam Cloud** button on the
   main menu lets you check sync status and pull or push saves by hand.
+  - **Offline play:** without a connection the game starts normally and saves on the device. Once Steam is
+    reachable again, your progress uploads automatically. If another device saved something newer in the
+    meantime, it loads the next time you're on the main menu. When both changed, the newer save wins and the
+    other copy is kept as a backup on the device.
 - **Multiplayer over direct IP**, on your home Wi-Fi or over [Tailscale](https://tailscale.com):
   - **Hosting:** Multiplayer → Host. A banner shows the address for others to join.
   - **Joining:** Multiplayer → Join, then enter the host's IP. The app remembers the last address.

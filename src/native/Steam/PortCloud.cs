@@ -28,6 +28,11 @@ static class PortCloud
 	static volatile string _busy = "", _result = "";
 	static PortCloudStore.Comparison? _compare;
 	static long _compareUnix;
+	static int _reconnecting; // 1 while ReconnectLoop runs
+	static int _pullingHeld;  // 1 while PullHeldAtMainMenu waits for the main menu
+	// Testing: while Documents/port_cloud_offline exists, Steam is treated as unreachable.
+	const string OfflineFlag = "user://port_cloud_offline";
+	static string? _offlineFlagPath;
 
 	public static void Log(string msg) => GD.Print("[CLOUD] " + msg);
 
@@ -37,6 +42,7 @@ static class PortCloud
 		PortHooks.ConstructSaveManager = ConstructSaveManager;
 		PortHooks.CloudSync = CloudSync;
 		SteamCm.Log = s => GD.Print(s);
+		SteamSession.SimulateOffline = () => _offlineFlagPath != null && System.IO.File.Exists(_offlineFlagPath);
 	}
 
 	static SaveManager ConstructSaveManager()
@@ -52,6 +58,9 @@ static class PortCloud
 				PortHooks.PersonaName = creds.PersonaName;
 			}
 			Store = new PortCloudStore(ProjectSettings.GlobalizePath(basePath), basePath, ProjectSettings.GlobalizePath("user://port_cloud"));
+			Store.ConnectionLost = why => StartReconnecting("uploads failed: " + why);
+			_offlineFlagPath = ProjectSettings.GlobalizePath(OfflineFlag);
+			if (System.IO.File.Exists(_offlineFlagPath)) Log("simulating offline (" + OfflineFlag + " exists)");
 			_account = creds == null ? null : creds.PersonaName ?? creds.AccountName;
 			// res://port/steam_cloud_menu.gd (main-menu Steam Cloud panel) reads status and starts actions through these.
 			Engine.Singleton.SetMeta("port_cloud_status", Callable.From(GetStatus));
@@ -81,8 +90,12 @@ static class PortCloud
 		{
 			GD.PrintErr("[CLOUD] sync failed: " + e);
 			store.LastError = e.Message;
-			if (!gameSyncStarted) store.Online = false;
-			Toast("Steam Cloud sync failed. Your progress will sync next launch.", 6);
+			if (!gameSyncStarted)
+			{
+				store.Online = false;
+				StartReconnecting("startup sync failed");
+			}
+			Toast("Steam Cloud sync failed. Your progress will sync when Steam is reachable again.", 6);
 		}
 		finally
 		{
@@ -110,7 +123,8 @@ static class PortCloud
 			Toast("Connecting to Steam Cloud…", 0);
 			try
 			{
-				using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+				// Don't hold up the game long when offline: it starts with local saves and syncs once Steam is reachable.
+				using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
 				await Task.Run(() => store.GoOnlineAsync(cts.Token));
 				break;
 			}
@@ -126,7 +140,8 @@ static class PortCloud
 			{
 				Log("Steam Cloud unreachable: " + e.Message);
 				store.Session = null;
-				Toast("Steam Cloud unavailable. Your progress will sync next launch.", 6);
+				Toast("Playing offline. Your progress will sync with Steam Cloud when you're back online.", 6);
+				StartReconnecting("Steam unreachable at launch");
 				return;
 			}
 		}
@@ -297,6 +312,119 @@ static class PortCloud
 		return null;
 	}
 
+	// ---- offline play: reconnect and sync without a relaunch ----
+
+	internal static void StartReconnecting(string why)
+	{
+		if (Interlocked.Exchange(ref _reconnecting, 1) == 1) return;
+		Log($"offline ({why}); syncing again once Steam is reachable");
+		_ = Task.Run(ReconnectLoop);
+	}
+
+	// Runs on worker threads: anything touching the game or the UI goes through OnMain.
+	static async Task ReconnectLoop()
+	{
+		try
+		{
+			for (int delay = 10; ; delay = Math.Min(delay * 2, 60))
+			{
+				await Task.Delay(TimeSpan.FromSeconds(delay)).ConfigureAwait(false);
+				var store = Store;
+				var creds = Credentials.Load();
+				if (store == null || creds == null) return; // not signed in: nothing to sync
+				if (store.Online) return;                  // a manual pull/push from the panel got there first
+				if (_syncing || _busy.Length > 0) continue;
+				try
+				{
+					store.Session ??= new SteamSession(creds);
+					using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+					await store.GoOnlineAsync(cts.Token).ConfigureAwait(false);
+					var (pushed, held) = await store.ResumeAsync(cts.Token).ConfigureAwait(false);
+					store.LastError = null;
+					_account = store.Session.Cm.PersonaName is { Length: > 0 } p ? p : creds.PersonaName ?? creds.AccountName;
+					PortHooks.SteamId = creds.SteamId;
+					Log($"back online: uploaded {pushed} change(s), {held} file(s) newer in Steam Cloud");
+					await OnMain(() => Toast(held > 0
+						? "Back online. Newer saves from Steam Cloud will load when you're on the main menu."
+						: pushed > 0 ? $"Back online. Synced {pushed} save file(s) to Steam Cloud." : "Back online. Steam Cloud is up to date.", 4)).ConfigureAwait(false);
+					if (held > 0 && Interlocked.Exchange(ref _pullingHeld, 1) == 0)
+						_ = Task.Run(() => PullHeldAtMainMenu(store));
+					return;
+				}
+				catch (SteamException e) when (e.IsAuthFailure)
+				{
+					Log("Steam rejected the saved sign-in while reconnecting: " + e.Message);
+					store.LastError = e.Message;
+					return; // the next launch asks to sign in again
+				}
+				catch (Exception e)
+				{
+					store.LastError = e.Message;
+					Log($"still offline ({e.Message}); retrying in {Math.Min(delay * 2, 60)}s");
+				}
+			}
+		}
+		finally
+		{
+			Interlocked.Exchange(ref _reconnecting, 0);
+		}
+	}
+
+	// Saves that are newer in Steam Cloud replace the ones loaded in memory only on the main menu (not mid-run),
+	// followed by the same reload the profile switcher does.
+	static async Task PullHeldAtMainMenu(PortCloudStore store)
+	{
+		try
+		{
+			await PullHeldLoop(store).ConfigureAwait(false);
+		}
+		finally
+		{
+			Interlocked.Exchange(ref _pullingHeld, 0);
+		}
+	}
+
+	static async Task PullHeldLoop(PortCloudStore store)
+	{
+		while (store.HeldCount > 0 && store.Online)
+		{
+			if (await OnMain(() => NGame.Instance?.MainMenu != null && !_syncing && _busy.Length == 0).ConfigureAwait(false))
+			{
+				try
+				{
+					using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+					int changed = await store.PullHeldAsync(cts.Token).ConfigureAwait(false);
+					if (changed > 0)
+						await OnMain(() =>
+						{
+							ReloadGameData();
+							Toast($"Loaded {changed} newer save file(s) from Steam Cloud.", 4);
+						}).ConfigureAwait(false);
+				}
+				catch (Exception e)
+				{
+					store.LastError = e.Message;
+					Log("pulling newer saves failed: " + e.Message);
+					if (!store.Online) return; // offline again: reconnecting resumes (and holds) again
+				}
+			}
+			await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+		}
+	}
+
+	static Task<T> OnMain<T>(Func<T> f)
+	{
+		var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+		Callable.From(() =>
+		{
+			try { tcs.SetResult(f()); }
+			catch (Exception e) { tcs.SetException(e); }
+		}).CallDeferred();
+		return tcs.Task;
+	}
+
+	static Task OnMain(Action a) => OnMain(() => { a(); return true; });
+
 	// ---- main-menu Steam Cloud panel (res://port/steam_cloud_menu.gd) ----
 
 	static Godot.Collections.Dictionary GetStatus()
@@ -312,6 +440,8 @@ static class PortCloud
 			["result"] = _result,
 			["last_sync"] = store?.LastSyncUnix ?? 0,
 			["pending"] = store?.PendingCount ?? 0,
+			["held"] = store?.HeldCount ?? 0,
+			["reconnecting"] = _reconnecting == 1,
 			["cloud_files"] = store?.CloudFileCount ?? 0,
 			["last_error"] = store?.LastError ?? "",
 			["can_transfer"] = store != null && _account != null && !_syncing && _busy.Length == 0,
