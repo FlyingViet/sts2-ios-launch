@@ -33,12 +33,20 @@ static class PortNames
 	const string Section = "names"; // names of past players, for run history (not the host's id 1, which varies)
 	static readonly byte[] Heartbeat = Encoding.UTF8.GetBytes("sts2port-hb");
 	const int HeartbeatMs = 25;
+	// Wi-Fi discovery (PortDiscovery.cs): a probe gets "sts2port-host 1\n<name>\t<players>\t<max>\t<in run 0|1>\t<version>".
+	public static readonly byte[] DiscoverProbe = Encoding.UTF8.GetBytes("sts2port-discover 1");
+	public const string HostReplyMagic = "sts2port-host 1";
+	static volatile byte[]? _hostInfo; // refreshed every second on the main thread while hosting
 
 	static readonly ConcurrentDictionary<ulong, string> _names = new();
 	static CancellationTokenSource? _session;
 	static bool _loaded;
 
 	static void Log(string msg) => GD.Print("[MP] " + msg);
+
+	// The version the game's own join compares (JoinFlow): release version, else the build's commit id.
+	public static string GameVersion => MegaCrit.Sts2.Core.Debug.ReleaseInfoManager.Instance.ReleaseInfo?.Version
+		?? MegaCrit.Sts2.Core.Debug.GitHelper.ShortCommitId ?? "UNKNOWN";
 
 	public static string Fallback(ulong id) => id == 1 ? "Host" : $"Player {id}";
 
@@ -68,7 +76,15 @@ static class PortNames
 		var tree = (SceneTree)Engine.GetMainLoop();
 		await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame); // StartENetHost is still running
 		while (!session.IsCancellationRequested && service.IsConnected)
+		{
+			// The lobby is part of the main menu; once a run starts, joining isn't possible.
+			bool inRun = MegaCrit.Sts2.Core.Nodes.NGame.Instance?.MainMenu == null;
+			string version = GameVersion;
+			_hostInfo = Encoding.UTF8.GetBytes($"{HostReplyMagic}\n{MyName ?? ""}\t{service.ConnectedPeers.Count + 1}\t" +
+				$"{PortHooks.LanMaxPlayers(4)}\t{(inRun ? 1 : 0)}\t{Clean(version)}");
 			await tree.ToSignal(tree.CreateTimer(1.0, true, false, true), SceneTreeTimer.SignalName.Timeout);
+		}
+		_hostInfo = null;
 		session.Cancel();
 	}
 
@@ -84,6 +100,12 @@ static class PortNames
 			try { r = await udp.ReceiveAsync(ct); }
 			catch (SocketException) { continue; } // e.g. port unreachable from a device that left
 			catch (Exception) { break; }
+			if (r.Buffer.AsSpan().SequenceEqual(DiscoverProbe))
+			{
+				if (_hostInfo is { } info)
+					try { await udp.SendAsync(info, r.RemoteEndPoint, ct); } catch (Exception) when (!ct.IsCancellationRequested) { }
+				continue;
+			}
 			if (r.Buffer.AsSpan().SequenceEqual(Heartbeat))
 			{
 				try { await udp.SendAsync(Heartbeat, r.RemoteEndPoint, ct); } catch (Exception) when (!ct.IsCancellationRequested) { }
@@ -194,7 +216,7 @@ static class PortNames
 		return _session = new CancellationTokenSource();
 	}
 
-	static string Clean(string s)
+	public static string Clean(string s)
 	{
 		s = new string(s.Where(c => !char.IsControl(c)).ToArray()).Trim();
 		return s.Length > 32 ? s[..32] : s;
