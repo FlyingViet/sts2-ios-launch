@@ -57,10 +57,19 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
   free at [developer.apple.com/download/all](https://developer.apple.com/download/all/) with any Apple ID, and
   keep it next to a newer Xcode, for example as `/Applications/Xcode-26.app`. Open it once so it finishes
   setting up.
-- **The game files**, from either source:
-  - **On the Mac:** install Slay the Spire 2 with Steam for Mac. The script finds it automatically.
+- **The game files** from your own Steam copy, on Steam's public branch (not a beta), from any of these:
+  - **On the Mac:** install Slay the Spire 2 with Steam for Mac. The script looks for it automatically (not yet
+    tested with a Mac install).
   - **From a PC:** in Steam, right-click Slay the Spire 2 → Manage → Browse local files, then copy that whole
     folder to the Mac. It contains `SlayTheSpire2.pck` and a `data_sts2_windows_x86_64` folder.
+  - **No PC (not yet tested):** download the Windows version with Valve's
+    [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) and your Steam login, then pass that folder
+    with `--game`:
+
+    ```sh
+    steamcmd +@sSteamCmdForcePlatformType windows +force_install_dir ~/sts2-game \
+      +login <your Steam username> +app_update 2868840 validate +quit
+    ```
 - **An Apple ID.** A free one works, but the app then stops opening after 7 days until you build and install it
   again (that takes a minute). A paid Apple Developer account lasts a year.
 - **An iPhone or iPad** on iOS 17 or later, with Developer Mode on (Settings → Privacy & Security → Developer
@@ -94,6 +103,9 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
 
 **To renew a free-account install** before or after it expires, run the same command again. Your saves are
 kept, and they're also in Steam Cloud.
+
+**To update** to the latest version of this repository, run `git pull` (or download the ZIP again), then the
+same build command. There's no in-app updater: iOS only runs code that was signed when the app was installed.
 
 ### Without an Apple account in Xcode
 
@@ -132,7 +144,22 @@ Built with Xcode 26, the same app runs fine on iOS 27.
   device is connected, unlocked and trusted. With a free Apple ID, Apple allows 3 sideloaded apps at a time
   and 10 new app IDs a week.
 - **No sound:** check the silent switch.
+- **A game isn't listed in Join:** both devices must be on the same Wi-Fi (guest networks often block devices from
+  seeing each other), the host must be on the Multiplayer → Host screen, and Local Network access must be on
+  (Settings → Privacy & Security → Local Network). PC hosts are never listed: type their IP.
+- **"Version mismatch" when joining:** everyone needs the same game version from Steam's public branch, and
+  iOS devices need a build of this repository from after the fix for this (October 8, 2026).
 - **The app's own log:** Files app → On My iPhone → Slay the Spire 2 → `godot.log`.
+
+## Known limits
+
+- **Rejoining a run in progress isn't supported** (the game itself only rejoins lobbies). If someone drops
+  mid-run, the host can use Pause → Save & Quit, then Continue, and everyone joins the saved run again; the
+  current room restarts.
+- **Multiplayer combat runs slower than singleplayer** on the host (around 40 fps measured on an iPhone 16 Pro
+  Max). Not yet investigated.
+- **Not yet tested with real players:** a full 5–6 player run, and an iPhone joining a PC host.
+- **A PC can't join a game hosted on iOS** (the PC game's Join only connects to itself), so PC players must host.
 
 ## How it works
 
@@ -142,16 +169,21 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
 1. **Engine:** exports an empty Godot 4.5.1 C# project ([`src/godot`](src/godot)) for iOS. That produces an
    Xcode project with the stock iOS engine and the FMOD and Spine extensions the game uses.
 2. **Patching:** patches the game's `sts2.dll` with Mono.Cecil ([`src/patcher`](src/patcher)) to add hooks for
-   Steam Cloud saves and direct-IP multiplayer, and to make a few fixes for iOS.
+   Steam Cloud saves and direct-IP multiplayer (including the 6-player limit), to read the game's version from
+   the app, to default to 120 FPS, and to make a few fixes for iOS.
 3. **Compiling:** compiles the game's code and the port's code ([`src/native`](src/native)) into a native iOS
-   library with .NET NativeAOT, since iOS can't run .NET code just in time. The port's code includes a small
-   Steam client used only for Cloud saves; your Steam password isn't stored, only a sign-in token in the iOS
-   Keychain.
+   library with .NET NativeAOT, since iOS can't run .NET code just in time. The port's code includes:
+   - a small Steam client used only for Cloud saves. Your Steam password isn't stored, only a sign-in token in
+     the iOS Keychain.
+   - a side channel for multiplayer on UDP port 33772, next to the game's own 33771. It carries player names,
+     Wi-Fi game discovery, and a light heartbeat that keeps the iPhone's Wi-Fi from dozing between moves.
+   - frame pacing, and the background keep-alive used during multiplayer.
 4. **Data:** adds the port's settings and scripts ([`src/pck`](src/pck)) to a copy of the game's `.pck`:
    - touch input
    - display and safe-area layout
    - the Steam Cloud screens
    - the multiplayer join and host screens
+   - your copy's `release_info.json` (the game version that multiplayer compares)
 5. **App build:** builds and signs the app with Xcode.
 
 These tools are downloaded from their official sources during the build. None of them are included here:
