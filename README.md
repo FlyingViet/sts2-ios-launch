@@ -27,8 +27,9 @@ endorsed by Mega Crit.
   - **Versions:** everyone needs the same game version.
   - **Steam:** friends lists, invites and Steam lobbies aren't available, because Steam doesn't exist on iOS.
 - Sound and music through FMOD (they follow the silent switch).
-- **Perfected Deck**, an extra custom-run modifier (singleplayer only): after every other modifier, your whole
-  deck turns into Perfected Strike+. Find it at the bottom of Singleplayer → Custom → modifiers.
+- **Extra custom-run modifiers** (singleplayer only), at the bottom of Singleplayer → Custom → modifiers:
+  - **Supercharged:** 20 extra Energy every turn.
+  - **Perfected Deck:** after every other modifier, your whole deck turns into Perfected Strike+.
 
 Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pro Max running iOS 27.
 
