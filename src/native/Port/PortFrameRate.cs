@@ -11,12 +11,28 @@ using Godot;
 // frames add input latency. Instead, run the display link at the limit (the largest rate dividing the refresh rate
 // that doesn't exceed it) and leave Metal's own limit off. The patched GodotSharp Engine.MaxFps keeps returning the
 // game's value and reports changes (settings, the 30 FPS background limit) through Engine.PortMaxFpsHook.
+//
+// Adaptive rate (battery and heat): above 60, the full rate only runs while something is happening: a finger on the
+// screen or touched in the last moments, or a one-shot tween running (the game animates cards, hits, numbers and
+// screen changes with tweens, all well under 2.5 s; looping tweens, tweens older than 2.5 s and tweens whose clock
+// hasn't moved for 1.5 s, like one that sits on the main menu, don't count). After 2 s of calm it drops to 60 Hz.
 static class PortFrameRate
 {
 	public static bool Pacing = true; // false = Godot's stock behaviour (for the benchmark)
+	public static bool Adaptive = true;
 	public static int DisplayRate { get; private set; }
+	public static int IdleFrames, FullFrames; // frames at the reduced / full rate since the last PERF summary
+	public static int TouchBusy, TweenBusy, MaxTweens; // why frames were busy (diagnostics, PERF summary)
+	public static double OldestTween; // seconds
 
-	static int _limit;
+	const double TouchHoldMs = 1500, IdleAfterMs = 2000, AmbientTweenSec = 2.5, StuckTweenMs = 1500;
+	static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+	static double _lastInputMs, _lastBusyMs;
+	static int _touches, _frame;
+	static bool _tweening;
+
+	static int _limit, _refresh;
+	static readonly System.Collections.Generic.Dictionary<ulong, (double Age, double Since)> _progress = new();
 	static bool _dirty = true;
 	static IntPtr _link;
 	static string _lastLog = "";
@@ -30,7 +46,43 @@ static class PortFrameRate
 			_dirty = true;
 			Update();
 		};
+		((SceneTree)Engine.GetMainLoop()).Root.WindowInput += OnInput;
 		Update();
+	}
+
+	static void OnInput(InputEvent e)
+	{
+		_lastInputMs = Clock.Elapsed.TotalMilliseconds;
+		if (e is InputEventScreenTouch touch)
+			_touches = Math.Max(0, _touches + (touch.Pressed ? 1 : -1));
+	}
+
+	// Main thread: any running tween that will end (a moving card, a hit, a screen transition)?
+	static bool Tweening()
+	{
+		int n = 0;
+		foreach (var tween in ((SceneTree)Engine.GetMainLoop()).GetProcessedTweens())
+		{
+			if (!tween.IsRunning())
+				continue;
+			if (tween.GetLoopsLeft() == -1)
+				continue;
+			double age = tween.GetTotalElapsedTime();
+			// A tween whose clock doesn't move (empty, or waiting on something) animates nothing: e.g. one that sits on
+			// the main menu at 0 s forever. Count it only until it has been seen stuck for a while.
+			ulong id = tween.GetInstanceId();
+			double now = Clock.Elapsed.TotalMilliseconds;
+			if (!_progress.TryGetValue(id, out var seen) || seen.Age != age)
+				_progress[id] = (age, now);
+			else if (now - seen.Since > StuckTweenMs)
+				continue;
+			OldestTween = Math.Max(OldestTween, age);
+			if (age < AmbientTweenSec)
+				n++;
+		}
+		MaxTweens = Math.Max(MaxTweens, n);
+		if (_progress.Count > 256) _progress.Clear(); // finished tweens; live ones re-register next check
+		return n > 0;
 	}
 
 	public static void Refresh()
@@ -43,17 +95,38 @@ static class PortFrameRate
 	internal static void Update()
 	{
 		IntPtr link = ObjC.GodotDisplayLink();
-		if (link == _link && !_dirty)
+		if (_refresh == 0 || _dirty)
+			_refresh = Math.Max(60, (int)Math.Round(DisplayServer.ScreenGetRefreshRate()));
+		int full = Pacing ? RateFor(_limit, _refresh) : _refresh;
+		int rate = full;
+		if (Adaptive && Pacing && full > 60)
+		{
+			double now = Clock.Elapsed.TotalMilliseconds;
+			if ((_frame++ & 1) == 0) _tweening = Tweening(); // every other frame is plenty
+			bool touch = _touches > 0 || now - _lastInputMs < TouchHoldMs;
+			if (touch) TouchBusy++;
+			if (_tweening) TweenBusy++;
+			if (touch || _tweening)
+				_lastBusyMs = now;
+			if (now - _lastBusyMs > IdleAfterMs)
+				rate = RateFor(60, _refresh);
+		}
+		if (rate < full) IdleFrames++; else FullFrames++;
+		if (link == _link && !_dirty && rate == DisplayRate)
 			return;
-		int refresh = Math.Max(60, (int)Math.Round(DisplayServer.ScreenGetRefreshRate()));
-		int rate = Pacing ? RateFor(_limit, refresh) : refresh;
 		if (link != IntPtr.Zero)
 			ObjC.SetPreferredFrameRate(link, rate);
+		if (link == _link && !_dirty)
+		{
+			DisplayRate = rate; // adaptive switch only: counted in the PERF summary, not logged
+			return;
+		}
 		Engine.PortSetMaxFpsNative(Pacing ? 0 : _limit);
 		_link = link;
 		_dirty = false;
 		DisplayRate = rate;
-		string log = $"[PORT] frame rate: game limit {_limit}, display link {rate} Hz (refresh {refresh}, pacing {(Pacing ? "on" : "off")})";
+		int refresh = _refresh;
+		string log = $"[PORT] frame rate: game limit {_limit}, display link {full} Hz{(Adaptive && full > 60 ? " (60 when idle)" : "")} (refresh {refresh}, pacing {(Pacing ? "on" : "off")})";
 		if (log != _lastLog)
 		{
 			_lastLog = log;

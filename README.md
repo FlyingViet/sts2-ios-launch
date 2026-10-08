@@ -40,7 +40,9 @@ endorsed by Mega Crit.
     Steam launch options, then use Multiplayer → Host on the PC.
   - **Versions:** everyone needs the same game version.
   - **Steam:** friends lists, invites and Steam lobbies aren't available, because Steam doesn't exist on iOS.
-- **120 FPS by default** on ProMotion iPhones (the game's default is 60); change it in Settings → FPS.
+- **120 FPS by default** on ProMotion iPhones (the game's default is 60); change it in Settings → FPS. To save
+  battery and heat, the screen drops to 60 Hz after 2 seconds without touches or animations, and returns to 120 the
+  moment you touch it or something moves.
 - Sound and music through FMOD (they follow the silent switch).
 - **Extra custom-run modifiers** (singleplayer only), at the bottom of Singleplayer → Custom → modifiers:
   - **Supercharged:** 20 extra Energy every turn.

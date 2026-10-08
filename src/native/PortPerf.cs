@@ -81,6 +81,7 @@ static unsafe class PortPerf
 		if (FileAccess.FileExists(BenchFlag))
 		{
 			_bench = BenchPlan(FileAccess.GetFileAsString(BenchFlag));
+			PortFrameRate.Adaptive = false; // measure fixed rates
 			DirAccess.RemoveAbsolute(BenchFlag);
 			_benchNextMs = Clock.Elapsed.TotalMilliseconds + BenchDelaySec * 1000;
 			GD.Print($"[BENCH] {_bench.Count} settings x {BenchSec}s, starting in {BenchDelaySec}s (leave the app on the main menu)");
@@ -126,8 +127,13 @@ static unsafe class PortPerf
 			GD.Print($"[PERF] summary t={now / 1000:F0}s fps={n / ((now - _windowStartMs) / 1000):F0} {Stats(_frames, _logic, _render)} " +
 				$"gc={_wg0}/{_wg1}/{_wg2} gcPause={_wPause.TotalMilliseconds:F0}ms pipelines={_wPipe:F0} heap={GC.GetTotalMemory(false) / 1048576}MB " +
 				$"vram={RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.VideoMemUsed) / 1048576}MB display={PortFrameRate.DisplayRate}Hz " +
+				$"idle={100 * PortFrameRate.IdleFrames / Math.Max(1, PortFrameRate.IdleFrames + PortFrameRate.FullFrames)}% " +
+				$"busy(touch/tween)={PortFrameRate.TouchBusy}/{PortFrameRate.TweenBusy} tweens<={PortFrameRate.MaxTweens} oldest={PortFrameRate.OldestTween:F0}s " +
 				$"thermal={ObjC.ThermalState()}{(ObjC.LowPowerMode() ? " lowPower" : "")}");
 			_frames.Clear(); _logic.Clear(); _render.Clear();
+			PortFrameRate.IdleFrames = PortFrameRate.FullFrames = 0;
+			PortFrameRate.TouchBusy = PortFrameRate.TweenBusy = PortFrameRate.MaxTweens = 0;
+			PortFrameRate.OldestTween = 0;
 			_windowStartMs = now; _wg0 = _wg1 = _wg2 = 0; _wPause = TimeSpan.Zero; _wPipe = 0;
 		}
 	}
