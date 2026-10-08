@@ -4,6 +4,7 @@ extends CanvasLayer
 
 signal join_submitted(ip: String)
 signal cancelled
+signal banner_action
 
 const GOLD := Color(0.95, 0.82, 0.45)
 
@@ -13,8 +14,11 @@ var _dialog: Control
 var _message: Label
 var _error: Label
 var _ip: LineEdit
+var _hosts_box: VBoxContainer
+var _hosts_status: Label
 var _banner: PanelContainer
 var _banner_label: Label
+var _banner_button: Button
 
 
 func _init() -> void:
@@ -63,9 +67,9 @@ func _init() -> void:
 	_message = Label.new()
 	_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_message.custom_minimum_size = Vector2(1120, 0)
-	_message.text = "Enter the host's IP address. A phone or iPad host shows it at the top of its screen. " \
-		+ "A PC host must launch Slay the Spire 2 with --fastmp, then choose Multiplayer > Host. " \
-		+ "Use the same Wi-Fi, or Tailscale when you're apart."
+	_message.text = "Pick a game on your Wi-Fi below, or enter the host's IP address (a phone or iPad host shows " \
+		+ "it at the top of its screen). A PC host must launch Slay the Spire 2 with --fastmp, then choose " \
+		+ "Multiplayer > Host. When you're apart, use Tailscale."
 	col.add_child(_message)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 18)
@@ -84,6 +88,23 @@ func _init() -> void:
 	_error = Label.new()
 	_error.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
 	col.add_child(_error)
+	# Games found on the network (set_hosts); below the field so the keyboard never covers it.
+	var hosts_title := Label.new()
+	hosts_title.text = "Games on your Wi-Fi"
+	hosts_title.add_theme_font_size_override("font_size", 30)
+	hosts_title.add_theme_color_override("font_color", GOLD)
+	if _font_bold != null:
+		hosts_title.add_theme_font_override("font", _font_bold)
+	col.add_child(hosts_title)
+	_hosts_box = VBoxContainer.new()
+	_hosts_box.add_theme_constant_override("separation", 10)
+	col.add_child(_hosts_box)
+	_hosts_status = Label.new()
+	_hosts_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
+	_hosts_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_hosts_status.custom_minimum_size = Vector2(1120, 0)
+	col.add_child(_hosts_status)
+	set_hosts([])
 	_dialog.visible = false
 
 	# Hosting banner.
@@ -94,7 +115,19 @@ func _init() -> void:
 	_banner_label.add_theme_font_size_override("font_size", 24)
 	if _font_bold != null:
 		_banner_label.add_theme_font_override("font", _font_bold)
-	_banner.add_child(_banner_label)
+	var banner_content := HBoxContainer.new()
+	banner_content.add_theme_constant_override("separation", 18)
+	banner_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_banner.add_child(banner_content)
+	_banner_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	banner_content.add_child(_banner_label)
+	_banner_button = _button("", func(): banner_action.emit())
+	_banner_button.custom_minimum_size = Vector2(150, 56)
+	_banner_button.add_theme_font_size_override("font_size", 24)
+	_banner_button.theme = Theme.new()
+	if _font != null:
+		_banner_button.theme.default_font = _font
+	banner_content.add_child(_banner_button)
 	var banner_row := CenterContainer.new()
 	banner_row.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	banner_row.position.y = 14
@@ -140,13 +173,35 @@ func show_join(ip: String, error: String) -> void:
 	_dialog.visible = true
 
 
+## hosts: [{ip, title, detail, joinable}], as found by PortDiscovery (aot/Port/PortDiscovery.cs).
+func set_hosts(hosts: Array) -> void:
+	for child in _hosts_box.get_children():
+		child.queue_free()
+	for host in hosts:
+		var ip: String = host["ip"]
+		var b := _button("%s   ·   %s" % [host["title"], host["detail"]], func():
+			DisplayServer.virtual_keyboard_hide()
+			join_submitted.emit(ip))
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.disabled = not host["joinable"]
+		if b.disabled:
+			b.modulate = Color(1, 1, 1, 0.5)
+		_hosts_box.add_child(b)
+	_hosts_status.text = "Looking for games… The host needs Multiplayer > Host open, on the same Wi-Fi."
+	_hosts_status.visible = hosts.is_empty()
+
+
 func close_join() -> void:
 	DisplayServer.virtual_keyboard_hide()
 	_dialog.visible = false
 
 
-func show_banner(text: String) -> void:
+## action: optional button text (e.g. "Cancel"); pressing it emits banner_action.
+func show_banner(text: String, action: String = "") -> void:
 	_banner_label.text = text
+	_banner_button.text = action
+	_banner_button.visible = action != ""
 	_banner.visible = true
 
 

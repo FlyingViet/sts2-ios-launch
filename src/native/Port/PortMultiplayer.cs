@@ -92,26 +92,38 @@ static class PortMp
 	{
 		var cfg = Config();
 		string ip = cfg.GetValue("mp", "last_ip", "").AsString();
+		var recent = cfg.GetValue("mp", "recent_ips", new string[0]).AsStringArray();
 		var (wifi, tailscale) = Addresses();
 		PokeLocalNetwork(wifi); // brings up iOS's Local Network prompt while the IP is being typed
 		string error = "";
-		while (true)
+		var ui = EnsureUi();
+		ui.Call("set_hosts", new Godot.Collections.Array());
+		PortDiscovery.Start(recent.Append(ip), hosts => Callable.From(() => ShowHosts(hosts)).CallDeferred());
+		try
 		{
-			EnsureUi().Call("show_join", ip, error);
-			var (kind, arg) = await NextChoice();
-			if (kind != "join")
+			while (true)
 			{
-				CloseUi();
-				// Leave the (empty) join screen as if its back button was pressed.
-				var back = screen.GetNodeOrNull<Control>("BackButton");
-				back?.EmitSignal("Released", back);
-				return;
+				ui.Call("show_join", ip, error);
+				var (kind, arg) = await NextChoice();
+				if (kind != "join")
+				{
+					CloseUi();
+					// Leave the (empty) join screen as if its back button was pressed.
+					var back = screen.GetNodeOrNull<Control>("BackButton");
+					back?.EmitSignal("Released", back);
+					return;
+				}
+				ip = arg.Trim();
+				if (Ipv4.IsMatch(ip) && IPAddress.TryParse(ip, out _)) break;
+				error = "That isn't an IP address. It looks like 192.168.1.20.";
 			}
-			ip = arg.Trim();
-			if (Ipv4.IsMatch(ip) && IPAddress.TryParse(ip, out _)) break;
-			error = "That isn't an IP address. It looks like 192.168.1.20.";
+		}
+		finally
+		{
+			PortDiscovery.Stop();
 		}
 		cfg.SetValue("mp", "last_ip", ip);
+		cfg.SetValue("mp", "recent_ips", new[] { ip }.Concat(recent.Where(r => r != ip)).Take(6).ToArray());
 		cfg.Save(ConfigPath);
 		CloseUi();
 		ulong id = ClientId();
@@ -119,6 +131,30 @@ static class PortMp
 		Log($"joining {ip}:{Port} as player {id} (this device: {wifi ?? "no Wi-Fi"}{(tailscale != null ? ", Tailscale " + tailscale : "")})");
 		await PortNames.StartClient(ip, id);
 		await screen.JoinGameAsync(new TrackedConnection(new ENetClientConnectionInitializer(id, ip, Port)));
+	}
+
+	// Join dialog list (main thread).
+	static void ShowHosts(List<PortDiscovery.Host> hosts)
+	{
+		if (_ui == null || !GodotObject.IsInstanceValid(_ui)) return;
+		string mine = PortNames.GameVersion;
+		var list = new Godot.Collections.Array();
+		foreach (var h in hosts)
+		{
+			bool sameVersion = h.Version == "" || mine == "" || h.Version == mine;
+			string detail = !sameVersion ? $"different game version ({h.Version}, you have {mine})"
+				: h.InRun ? "run in progress, can't join"
+				: h.Players >= h.Max ? $"full ({h.Players} of {h.Max} players)"
+				: $"{h.Players} of {h.Max} player{(h.Max == 1 ? "" : "s")} · {h.Ip}";
+			list.Add(new Godot.Collections.Dictionary
+			{
+				["ip"] = h.Ip,
+				["title"] = h.Name.Length > 0 ? $"{h.Name}'s game" : $"Game at {h.Ip}",
+				["detail"] = detail,
+				["joinable"] = sameVersion && !h.InRun && h.Players < h.Max,
+			});
+		}
+		_ui.Call("set_hosts", list);
 	}
 
 	// Hands the joined game's service to PortKeepAlive, which keeps the session running while the app isn't in front.

@@ -435,6 +435,30 @@ else if (asm.Name.Name == "sts2")
 		Console.WriteLine("error popups always offer OK");
 	}
 
+	// The game reads its version (release_info.json, compared when joining multiplayer) from next to the executable,
+	// which an iOS app bundle doesn't have: read the copy build.sh puts in the pck instead. Without it the version is
+	// "UNKNOWN" and joining a PC host fails with a version mismatch.
+	{
+		const string rim = "MegaCrit.Sts2.Core.Debug.ReleaseInfoManager";
+		Stub(rim, "GetPossibleReleaseInfoPaths", il =>
+		{
+			il.Emit(OpCodes.Ldc_I4_1);
+			il.Emit(OpCodes.Newarr, module.TypeSystem.String);
+			il.Emit(OpCodes.Dup);
+			il.Emit(OpCodes.Ldc_I4_0);
+			il.Emit(OpCodes.Ldstr, "res://port/release_info.json");
+			il.Emit(OpCodes.Stelem_Ref);
+			il.Emit(OpCodes.Ret);
+		});
+		// LoadConfig globalizes each path to an OS path; a res:// path must stay as is to be read from the pck.
+		var load = Method(rim, "LoadConfig");
+		var globalize = load.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand is MethodReference r && r.Name == "GlobalizePath");
+		globalize.OpCode = OpCodes.Nop;
+		globalize.Operand = null;
+		patched++;
+		Console.WriteLine("release_info.json read from res://port");
+	}
+
 	// FPS limit: the game defaults to 60 (new settings and Settings > Reset graphics). iPhones with ProMotion show
 	// 120 Hz, so default to 120 there; a 60 Hz display still runs at 60 (src/native/Port/PortFrameRate.cs).
 	{

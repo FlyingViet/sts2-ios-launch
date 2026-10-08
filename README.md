@@ -28,7 +28,9 @@ endorsed by Mega Crit.
   - **Up to 6 players** when an iPhone or iPad hosts (the game's own limit is 4). Everyone needs this app;
     a PC can't join an iOS host. Players 5 and 6 sit beside the logs at rest sites and get their own relic
     in treasure rooms.
-  - **Joining:** Multiplayer → Join, then enter the host's IP. The app remembers the last address.
+  - **Joining:** Multiplayer → Join. Games hosted by iPhones and iPads on the same Wi-Fi are listed (with the
+    host's name and player count): tap one to join. Otherwise enter the host's IP; recent addresses, including
+    Tailscale ones, are checked and listed too.
   - **Names:** players see each other's Steam names. Names come from the iOS host, so with a PC host
     they show as "Host" / "Player 123456".
   - **Keeps running when you leave the app:** during a multiplayer game, pulling down Notification Center or

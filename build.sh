@@ -319,11 +319,14 @@ install_name_tool -id @rpath/sts2.framework/sts2 "$FRAMEWORK/sts2" 2>/dev/null
 
 # ---------------------------------------------------------------------------------------------------- game data
 # Add the port's scripts and settings (src/pck) to a copy of the game's pck, at the same res:// paths.
-FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "$TOOLS_ID")"
+# The game's release_info.json (its version, which multiplayer joins compare) normally sits next to the
+# executable; on iOS it's read from the pck instead (see src/patcher: ReleaseInfoManager).
+FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "${INFO:-no-release-info}" "$TOOLS_ID")"
 if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 	step "Adding the port's files to the game data (about 2 GB)"
 	PF=()
 	while IFS= read -r f; do PF+=("--patch-file=$f=res://${f#$ROOT/src/pck/}"); done < <(find "$ROOT/src/pck" -type f ! -name '.DS_Store')
+	[[ -n "$INFO" ]] && PF+=("--patch-file=$INFO=res://port/release_info.json")
 	rm -f "$WORK/sts2.pck"
 	run pck-patch "$GDRE" --headless --pck-patch="$PCK" --output="$WORK/sts2.pck" "${PF[@]}"
 	[[ -f "$WORK/sts2.pck" ]] || die "pck patch produced no file (see $(show "$LOGS/pck-patch.log"))"
