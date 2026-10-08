@@ -2,12 +2,17 @@ extends Node
 ## iOS port: translates touch into mouse input.
 ## Tap = click, drag = press-drag, hold still >= LONG_PRESS_SEC = inspect (hover only, so tooltips
 ## show; slide to inspect neighbours; lifting the finger hides them without clicking).
+## While a card is aiming at a target, the pointer snaps onto the nearest valid target's hitbox within
+## SNAP_RADIUS (the finger hides the target and the arrow tip), except near the hand, so dragging back
+## down still cancels.
 
 const LONG_PRESS_SEC := 0.35
 const DRAG_THRESHOLD_PX := 24.0 # raw window pixels (~8 pt on a 3x screen)
 const OFFSCREEN := Vector2(-4000, -4000)
 const CANCEL_CHECK_FRAMES := 3
 const DEBUG := false # logs geometry + saves user://port_shots/inspect_N.png during long-press
+const SNAP_RADIUS := 170.0 # canvas units from a target's hitbox
+const SNAP_HAND_ZONE := 0.25 # bottom part of the screen (hand, End Turn) where the pointer never snaps
 
 enum State { IDLE, PENDING, PRESSED, INSPECT }
 
@@ -22,6 +27,8 @@ var _cancel_after_tap := false
 var _shot_pending := false
 var _shot_index := 0
 var _hand: Node = null # NPlayerHand (NMouseCardPlay is added as its child), tracked via node_added
+var _target_manager: Node = null # NTargetManager
+var _creatures: Array[Node] = [] # NCreature
 
 
 func _ready() -> void:
@@ -107,6 +114,7 @@ func _on_window_input(event: InputEvent) -> void:
 
 
 func _motion(pos: Vector2, mask: int) -> void:
+	pos = _snap(pos)
 	var ev := InputEventMouseMotion.new()
 	ev.position = pos
 	ev.global_position = pos
@@ -117,6 +125,7 @@ func _motion(pos: Vector2, mask: int) -> void:
 
 
 func _button(pos: Vector2, pressed: bool) -> void:
+	pos = _snap(pos)
 	var ev := InputEventMouseButton.new()
 	ev.position = pos
 	ev.global_position = pos
@@ -152,8 +161,45 @@ func _card_play_active() -> bool:
 
 func _on_node_added(node: Node) -> void:
 	var scr: Script = node.get_script()
-	if scr != null and scr.resource_path.get_file() == "NPlayerHand.cs":
-		_hand = node
+	if scr == null:
+		return
+	match scr.resource_path.get_file():
+		"NPlayerHand.cs":
+			_hand = node
+		"NTargetManager.cs":
+			_target_manager = node
+		"NCreature.cs":
+			_creatures.append(node)
+
+
+# Window position -> the same, or the centre of the nearest valid target's hitbox while targeting.
+func _snap(pos: Vector2) -> Vector2:
+	if _target_manager == null or not is_instance_valid(_target_manager) or not _target_manager.get("IsInSelection"):
+		return pos
+	var xf := get_viewport().get_final_transform()
+	var point := xf.affine_inverse() * pos
+	if point.y > get_viewport().get_visible_rect().size.y * (1.0 - SNAP_HAND_ZONE):
+		return pos
+	var best := Rect2()
+	var best_distance := SNAP_RADIUS
+	var i := _creatures.size() - 1
+	while i >= 0:
+		var creature := _creatures[i]
+		if not is_instance_valid(creature):
+			_creatures.remove_at(i)
+		elif creature.is_inside_tree():
+			var hitbox := creature.get_node_or_null("Hitbox") as Control
+			if hitbox != null and hitbox.is_visible_in_tree() and hitbox.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+					and _target_manager.call("AllowedToTargetNode", creature):
+				var rect := hitbox.get_global_rect()
+				var distance := (point.clamp(rect.position, rect.end) - point).length()
+				if distance < best_distance:
+					best_distance = distance
+					best = rect
+		i -= 1
+	if not best.has_area() or best.has_point(point):
+		return pos
+	return xf * best.get_center()
 
 
 func _player_hand() -> Node:
