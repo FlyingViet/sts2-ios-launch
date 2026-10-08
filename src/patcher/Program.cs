@@ -435,6 +435,25 @@ else if (asm.Name.Name == "sts2")
 		Console.WriteLine("error popups always offer OK");
 	}
 
+	// FPS limit: the game defaults to 60 (new settings and Settings > Reset graphics). iPhones with ProMotion show
+	// 120 Hz, so default to 120 there; a 60 Hz display still runs at 60 (src/native/Port/PortFrameRate.cs).
+	{
+		int defaults = 0;
+		var owners = new[] { "MegaCrit.Sts2.Core.Saves.SettingsSave", "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NResetGraphicsButton" };
+		foreach (var t in module.GetTypes().Where(t => owners.Any(o => t.FullName == o || t.FullName.StartsWith(o + "/"))))
+			foreach (var m in t.Methods.Where(m => m.HasBody))
+				foreach (var ins in m.Body.Instructions)
+					if (ins.OpCode == OpCodes.Ldc_I4_S && (sbyte)ins.Operand == 60 && ins.Next?.Operand is MemberReference target
+						&& target.Name is "set_FpsLimit" or "<FpsLimit>k__BackingField")
+					{
+						ins.Operand = (sbyte)120;
+						defaults++;
+					}
+		if (defaults != 2) throw new Exception($"expected 2 FpsLimit = 60 defaults, found {defaults}");
+		patched++;
+		Console.WriteLine("default FPS limit 120");
+	}
+
 	// ---- port content (src/native/Port/PerfectedDeck.cs) ----
 	// Called once models and localization are loaded, before any save is read: register extra models there.
 	var actionOpen0 = new TypeReference("System", "Action", module, runtime);
