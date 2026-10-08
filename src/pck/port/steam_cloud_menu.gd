@@ -118,7 +118,9 @@ func _state_text() -> String:
 	if not _status.signed_in:
 		return "Not signed in"
 	if not _status.online:
-		return "Offline"
+		return "Offline · reconnecting" if _status.get("reconnecting", false) else "Offline"
+	if _status.get("held", 0) > 0:
+		return "Newer saves on Steam"
 	if _status.pending > 0:
 		return "Uploading %d…" % _status.pending
 	var c: Dictionary = _status.get("compare", {})
@@ -291,6 +293,10 @@ func _update_panel() -> void:
 		if not c.is_empty():
 			var when := _format_time(int(c.checked))
 			lines.append("[b]Compared %s:[/b] %s" % [when[0].to_lower() + when.substr(1), _compare_text(c)])
+		if s.signed_in and not s.online:
+			lines.append("Playing offline. Your progress is saved on this iPhone and syncs automatically when Steam is reachable again.")
+		if s.get("held", 0) > 0:
+			lines.append("%d save file(s) changed on another device while you were offline. They load automatically on the main menu." % s.held)
 		if s.last_error != "":
 			lines.append("[color=#ff9a8a][b]Last error:[/b] %s[/color]" % s.last_error)
 		if not s.signed_in:

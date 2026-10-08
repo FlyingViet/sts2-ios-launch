@@ -23,10 +23,18 @@ sealed class SteamSession
 	public readonly SteamCm Cm = new();
 	readonly SemaphoreSlim _lock = new(1, 1);
 
+	// Testing: while this returns true, Steam is treated as unreachable (see PortCloud.OfflineFlag).
+	public static Func<bool>? SimulateOffline;
+
 	public SteamSession(Credentials creds) => Creds = creds;
 
 	public async Task<SteamCm> EnsureAsync(CancellationToken ct = default)
 	{
+		if (SimulateOffline?.Invoke() == true)
+		{
+			Cm.Disconnect();
+			throw new IOException("offline (simulated)");
+		}
 		if (Cm.IsLoggedOn) return Cm;
 		await _lock.WaitAsync(ct).ConfigureAwait(false);
 		try
@@ -70,6 +78,7 @@ sealed class PortCloudStore : ICloudSaveStore
 	readonly Dictionary<string, byte[]> _prefetched = new(StringComparer.Ordinal);
 	Dictionary<string, long> _synced = new(StringComparer.Ordinal);
 	readonly Dictionary<string, Op> _pending = new(StringComparer.Ordinal);
+	readonly HashSet<string> _held = new(StringComparer.Ordinal); // newer in Steam Cloud after offline play: pulled at the main menu
 	bool _firstSync = true;
 	bool _workerRunning;
 	volatile bool _paused; // manual pull/push in progress: the upload worker stands down
@@ -82,6 +91,10 @@ sealed class PortCloudStore : ICloudSaveStore
 	public volatile string? LastError;
 
 	public int PendingCount { get { lock (_lock) return _pending.Count + _inFlight; } }
+	public int HeldCount { get { lock (_lock) return _held.Count; } }
+
+	// Called (from a worker thread) when uploads fail because Steam is unreachable; Online is already false.
+	public Action<string>? ConnectionLost;
 	public int CloudFileCount { get { lock (_lock) return _cloud.Keys.Count(k => Scope.IsMatch(k)); } }
 
 	sealed record Op(string Path, byte[]? Data, long Ts, long? PrevCloudTs);
@@ -213,6 +226,130 @@ sealed class PortCloudStore : ICloudSaveStore
 	}
 
 	long? LocalTs(string path) => File.Exists(Abs(path)) ? new DateTimeOffset(File.GetLastWriteTimeUtc(Abs(path))).ToUnixTimeSeconds() : null;
+
+	// Back online in a session that started (or went) offline, after GoOnlineAsync: pushes what changed here since
+	// the last sync. A file that also changed in Steam Cloud goes to the newer side; the other copy is backed up.
+	// Files newer in Steam Cloud can't replace what the game holds in memory mid-run: they are "held" (not
+	// uploaded over) and PullHeldAsync loads them at the main menu. The local files are the source of truth for
+	// what to upload, so uploads queued while offline are dropped. Returns (uploaded or deleted, held).
+	public async Task<(int Pushed, int Held)> ResumeAsync(CancellationToken ct)
+	{
+		var local = LocalScope();
+		Dictionary<string, CloudFile> cloud;
+		lock (_lock)
+		{
+			_pending.Clear();
+			_held.Clear();
+			cloud = new Dictionary<string, CloudFile>(_cloud);
+		}
+		var paths = new HashSet<string>(local.Keys, StringComparer.Ordinal);
+		paths.UnionWith(_synced.Keys);
+		paths.UnionWith(cloud.Keys.Where(k => Scope.IsMatch(k)));
+		int pushed = 0;
+		var cm = await Session!.EnsureAsync(ct).ConfigureAwait(false);
+		foreach (var path in paths.OrderBy(p => p, StringComparer.Ordinal))
+		{
+			long? l = local.TryGetValue(path, out var lv) ? lv : null;
+			long? s = _synced.TryGetValue(path, out var sv) ? sv : null;
+			long? c = cloud.TryGetValue(path, out var cf) ? cf.Timestamp : null;
+			if (l.HasValue && l == c)
+			{
+				lock (_lock) _synced[path] = l.Value;
+				continue;
+			}
+			bool localChanged = _firstSync || l != s, cloudChanged = _firstSync || c != s;
+			if (!localChanged && !cloudChanged) continue;
+			// First sync for this account: Steam Cloud is authoritative, as at launch.
+			bool localWins = !_firstSync && localChanged && (!cloudChanged || (l.HasValue && (!c.HasValue || l > c)));
+			if (!localWins)
+			{
+				if (!cloudChanged || (_firstSync && !c.HasValue)) continue; // keep files that exist only here
+				if (localChanged && l.HasValue) BackupConflict(path, await File.ReadAllBytesAsync(Abs(path), ct).ConfigureAwait(false), "local");
+				lock (_lock) _held.Add(path);
+				PortCloud.Log($"{path} is newer in Steam Cloud (local={l} cloud={c} lastSync={s}): loads at the main menu");
+				continue;
+			}
+			if (cloudChanged && c.HasValue)
+			{
+				PortCloud.Log($"conflict {path}: local={l} cloud={c} lastSync={s} -> local wins");
+				BackupConflict(path, await SteamApi.DownloadAsync(cm, path, ct).ConfigureAwait(false), "cloud");
+			}
+			if (l.HasValue)
+			{
+				var data = await File.ReadAllBytesAsync(Abs(path), ct).ConfigureAwait(false);
+				bool uploaded = await SteamApi.UploadAsync(cm, path, data, l.Value, 0, ct).ConfigureAwait(false);
+				lock (_lock)
+				{
+					long ts = l.Value;
+					if (!uploaded && c.HasValue)
+					{
+						SetLocalTs(path, c.Value);
+						ts = c.Value;
+					}
+					_cloud[path] = new CloudFile { Name = path, Timestamp = ts, Size = data.Length };
+					_synced[path] = ts;
+				}
+			}
+			else if (c.HasValue)
+			{
+				await SteamApi.DeleteAsync(cm, path, 0, ct).ConfigureAwait(false);
+				lock (_lock)
+				{
+					_cloud.Remove(path);
+					_synced.Remove(path);
+				}
+			}
+			pushed++;
+		}
+		int held = HeldCount;
+		if (!_firstSync || held == 0) _firstSync = false;
+		SaveState();
+		if (held == 0) Interlocked.Exchange(ref LastSyncUnix, Now());
+		Online = true;
+		Kick();
+		return (pushed, held);
+	}
+
+	// Loads the held files (see ResumeAsync) from Steam Cloud; local copies are backed up first. The caller reloads the
+	// game's save data afterwards. Returns the number of files changed here.
+	public async Task<int> PullHeldAsync(CancellationToken ct)
+	{
+		List<string> paths;
+		lock (_lock) paths = _held.ToList();
+		if (paths.Count == 0) return 0;
+		var cloud = await RefreshCloudAsync(ct).ConfigureAwait(false);
+		var cm = await Session!.EnsureAsync(ct).ConfigureAwait(false);
+		var backup = NewBackupDir("before-pull");
+		int changed = 0;
+		foreach (var path in paths)
+		{
+			lock (_lock)
+				if (!_held.Contains(path)) continue; // the game saved it in the meantime: that newer copy was uploaded
+			var abs = Abs(path);
+			if (File.Exists(abs)) WriteBackup(backup, path, File.ReadAllBytes(abs));
+			if (cloud.TryGetValue(path, out var c))
+			{
+				var bytes = await SteamApi.DownloadAsync(cm, path, ct).ConfigureAwait(false);
+				Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+				File.WriteAllBytes(abs + ".port_tmp", bytes);
+				File.Move(abs + ".port_tmp", abs, true);
+				SetLocalTs(path, c.Timestamp);
+				lock (_lock) _synced[path] = c.Timestamp;
+			}
+			else if (File.Exists(abs))
+			{
+				File.Delete(abs);
+				lock (_lock) _synced.Remove(path);
+			}
+			lock (_lock) _held.Remove(path);
+			changed++;
+		}
+		lock (_lock) _firstSync = false;
+		SaveState();
+		if (HeldCount == 0 && PendingCount == 0) Interlocked.Exchange(ref LastSyncUnix, Now());
+		PortCloud.Log($"pulled {changed} file(s) that were newer in Steam Cloud");
+		return changed;
+	}
 
 	void BackupConflict(string path, byte[] data, string side)
 	{
@@ -401,6 +538,21 @@ sealed class PortCloudStore : ICloudSaveStore
 					Online = false;
 					PortCloud.Log("Steam rejected the saved sign-in; uploads stop until the next launch: " + e.Message);
 				}
+				else if (IsConnectionFailure(e))
+				{
+					// Offline: the saves on disk are the record of what to upload (ResumeAsync), so stop here and let
+					// PortCloud reconnect.
+					Online = false;
+					lock (_lock)
+					{
+						_pending.Clear();
+						_inFlight = 0;
+						_workerRunning = false;
+					}
+					PortCloud.Log($"cloud upload failed ({e.Message}): offline");
+					ConnectionLost?.Invoke(e.Message);
+					return;
+				}
 				lock (_lock)
 				{
 					foreach (var op in remaining)
@@ -413,8 +565,23 @@ sealed class PortCloudStore : ICloudSaveStore
 		}
 	}
 
+	static bool IsConnectionFailure(Exception e) =>
+		e is IOException or System.Net.WebSockets.WebSocketException or System.Net.Http.HttpRequestException
+			or System.Net.Sockets.SocketException or OperationCanceledException or TimeoutException
+		|| e is SteamException { Result: 3 } // NoConnection
+		|| (e.InnerException != null && IsConnectionFailure(e.InnerException));
+
 	async Task Perform(SteamCm cm, Op op, ulong batch)
 	{
+		bool held;
+		lock (_lock) held = _held.Remove(op.Path);
+		if (held)
+		{
+			// Newer in Steam Cloud, but the game just saved this file again, so this copy is now the newest: keep the
+			// one it replaces.
+			try { BackupConflict(op.Path, await SteamApi.DownloadAsync(cm, op.Path).ConfigureAwait(false), "cloud"); }
+			catch (SteamException) { }
+		}
 		if (op.Data == null)
 		{
 			await SteamApi.DeleteAsync(cm, op.Path, batch).ConfigureAwait(false);
