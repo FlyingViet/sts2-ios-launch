@@ -52,6 +52,14 @@ const BG_COVER_MARGIN := 30.0 # past the screen edges, so screen shake doesn't r
 const BG_MAX_SCALE := 1.8
 const BG_FLOOR := Vector2(0, 200) # background point creatures stand on; enlarging around it keeps them on the floor
 
+# Card inspect screen (tap a card in a deck view): the game shows the card at 1.75x with "View Upgrades" 450-514 below
+# the centre, laid out for a 1080-tall canvas, so on ours the toggle ends below the screen. Shrink the card just enough
+# and move it up so card and toggle fit above the home indicator.
+const INSPECT_SCALE := 1.75 # NInspectCardScreen.Open
+const INSPECT_TOP := 12.0 # space above the energy gem
+const INSPECT_GEM := 15.0 # the cost gem sticks out this far above the card frame (at scale 1)
+const INSPECT_GAP := 20.0 # card bottom to toggle
+
 var _scene: Control = null # NCombatRoom's CombatSceneContainer
 var _shake: Node = null # NScreenShake: re-applies the scene's base position every frame
 var _top_row: Control = null # TopBar/LeftAlignedStuff
@@ -63,6 +71,7 @@ var _scene_since := 0
 var _scene_logged := false
 var _bg_node: Node = null
 var _bg_cover := Rect2() # BgContainer-local rect every full-screen background layer covers
+var _inspect: Control = null # NInspectCardScreen
 
 var _inset := 0.0 # logical canvas units
 var _targets: Array[Control] = []
@@ -133,6 +142,9 @@ func _on_node_added(node: Node) -> void:
 				return
 			"NEndTurnButton.cs":
 				_end_turn_buttons.append(node as Control)
+				return
+			"NInspectCardScreen.cs":
+				_inspect = node as Control
 				return
 	if BOTTOM_CLAMP.has(String(node.name)) and node.owner != null:
 		var owner_scr: Script = node.owner.get_script()
@@ -357,6 +369,7 @@ static func _background_cover(bgc: Control, bg: Node) -> Rect2:
 
 func _before_draw() -> void:
 	_layout_combat()
+	_fit_inspect()
 	var vis := get_viewport().get_visible_rect().size
 	var vw := vis.x
 	var j := _bottom_clamped.size() - 1
@@ -380,6 +393,54 @@ func _before_draw() -> void:
 			if not is_equal_approx(b.position.x, x):
 				b.position.x = x
 		i -= 1
+
+
+func _fit_inspect() -> void:
+	if _inspect == null or not is_instance_valid(_inspect) or not _inspect.is_node_ready() \
+			or not _inspect.is_visible_in_tree():
+		return
+	var card := _inspect.get_node_or_null("Card") as Control
+	var toggle := _inspect.get_node_or_null("Upgrade") as Control
+	var tips := _inspect.get_node_or_null("HoverTipRect") as Control
+	if card == null or toggle == null or tips == null:
+		return
+	if not _inspect.has_meta("port_orig"):
+		var card_pos = _inspect.get("_cardPosition")
+		if not (card_pos is Vector2):
+			return
+		_inspect.set_meta("port_orig", {
+			"card": card_pos,
+			"toggle": Vector2(toggle.offset_top, toggle.offset_bottom),
+			"tips": Vector4(tips.offset_left, tips.offset_top, tips.offset_right, tips.offset_bottom),
+		})
+	var orig: Dictionary = _inspect.get_meta("port_orig")
+	var h := _inspect.size.y
+	var fit: Vector3 = _inspect.get_meta("port_fit", Vector3(-1, 0, 0)) # canvas height, card scale, card y shift
+	if not is_equal_approx(fit.x, h):
+		var t: Vector2 = orig["toggle"]
+		var tip: Vector4 = orig["tips"]
+		var s := INSPECT_SCALE
+		var dy := 0.0
+		if t.y > h / 2.0 - _bottom_margin:
+			var half := tip.w / INSPECT_SCALE # card frame half-height at scale 1 (the tooltip area matches the card)
+			var avail := h - _bottom_margin - INSPECT_TOP
+			s = minf(INSPECT_SCALE, (avail - INSPECT_GAP - (t.y - t.x)) / (2.0 * half + INSPECT_GEM))
+			dy = INSPECT_TOP + (INSPECT_GEM + half) * s - h / 2.0
+			var k := s / INSPECT_SCALE
+			toggle.offset_top = dy + half * s + INSPECT_GAP
+			toggle.offset_bottom = toggle.offset_top + (t.y - t.x)
+			tips.offset_left = tip.x * k
+			tips.offset_right = tip.z * k
+			tips.offset_top = dy + tip.y * k
+			tips.offset_bottom = dy + tip.w * k
+			print("[PORT] card inspect: scale %.2f, raised %.0f (canvas height %.0f)" % [s, -dy, h])
+		var base: Vector2 = orig["card"]
+		_inspect.set("_cardPosition", base + Vector2(0, dy)) # the game tweens the card back to this
+		card.position.y = base.y + dy
+		fit = Vector3(h, s, dy)
+		_inspect.set_meta("port_fit", fit)
+	if card.scale.x > fit.y + 0.001: # Open sets 1.75
+		card.scale = Vector2(fit.y, fit.y)
 
 
 func _apply_insets() -> void:
