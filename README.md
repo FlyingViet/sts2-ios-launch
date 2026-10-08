@@ -25,9 +25,12 @@ endorsed by Mega Crit.
     other copy is kept as a backup on the device.
 - **Multiplayer over direct IP**, on your home Wi-Fi or over [Tailscale](https://tailscale.com):
   - **Hosting:** Multiplayer → Host. A banner shows the address for others to join.
+  - **Up to 6 players** when an iPhone or iPad hosts (the game's own limit is 4). Everyone needs this app;
+    a PC can't join an iOS host. Players 5 and 6 sit beside the logs at rest sites and get their own relic
+    in treasure rooms.
   - **Joining:** Multiplayer → Join, then enter the host's IP. The app remembers the last address.
-  - **With a PC:** the PC must host. Add `--fastmp` to the game's Steam launch options, then use
-    Multiplayer → Host on the PC.
+  - **With a PC:** the PC must host, and PC-hosted games stay at 4 players. Add `--fastmp` to the game's
+    Steam launch options, then use Multiplayer → Host on the PC.
   - **Versions:** everyone needs the same game version.
   - **Steam:** friends lists, invites and Steam lobbies aren't available, because Steam doesn't exist on iOS.
 - Sound and music through FMOD (they follow the silent switch).

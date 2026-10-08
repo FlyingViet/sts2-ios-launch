@@ -44,7 +44,7 @@ static class PortModifiers
 	[ModuleInitializer]
 	internal static void Init()
 	{
-		PortHooks.AfterEssentialInit = Register;
+		PortHooks.AfterEssentialInit += Register;
 		PortHooks.CustomRunModifiers = bad => bad.Concat(All.Select(t => (ModifierModel)ModelDb.GetById<ModifierModel>(ModelDb.GetId(t)))).ToList();
 		PortHooks.CustomRunModifiersInitialize = OnModifiersListInitialize;
 	}
