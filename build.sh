@@ -260,7 +260,7 @@ fi
 # Export an empty Godot C# project (named like the game's assembly) as an Xcode project: this provides the stock
 # Godot 4.5.1 iOS engine with FMOD and Spine. The game's code and data are swapped in afterwards.
 X="$WORK/xcode"
-FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION" "$TOOLS_ID")"
+FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION plist-bgaudio" "$TOOLS_ID")"
 if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	step "Exporting the Godot iOS project"
 	P="$WORK/proj"; rm -rf "$P" && mkdir -p "$P/addons"
@@ -278,7 +278,10 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	/usr/libexec/PlistBuddy -c "Add :godot_cmdline array" -c "Add :godot_cmdline:0 string --force-steam=off" \
 		-c "Add :godot_cmdline:1 string --log-file" -c "Add :godot_cmdline:2 string user://godot.log" \
 		-c "Add :NSLocalNetworkUsageDescription string Slay the Spire 2 uses your local network to host and join multiplayer games." \
+		-c "Add :UIBackgroundModes array" -c "Add :UIBackgroundModes:0 string audio" \
 		"$X/sts2/sts2-Info.plist"
+	# UIBackgroundModes audio: only used during multiplayer, to keep the game running in the background
+	# (src/native/Port/PortKeepAlive.cs); otherwise the app is suspended as usual.
 	# fmod-gdextension's iOS export plugin doesn't generate its plugin loader under Godot 4.5. Ours also swaps the
 	# extension's racy async file callbacks for blocking reads from the pck (see the file).
 	cat "$ROOT/src/ios/fmod_plugins_stub.cpp" >> "$X/sts2/dummy.cpp"
