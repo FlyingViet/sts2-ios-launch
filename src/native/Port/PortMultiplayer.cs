@@ -51,6 +51,7 @@ static class PortMp
 		PortHooks.RestSiteSeats = AddRestSiteSeats;
 		PortHooks.TreasureRelicHolders = AddTreasureRelicHolders;
 		PortHooks.AfterEssentialInit += EnableSixPlayers;
+		PortHooks.AfterEssentialInit += PortKeepAlive.Install;
 	}
 
 	static void Log(string msg) => GD.Print("[MP] " + msg);
@@ -59,8 +60,8 @@ static class PortMp
 
 	static string PlayerName(ulong id)
 	{
-		if (id == LocalId && PortHooks.PersonaName is { Length: > 0 } me) return me;
-		return id == 1 ? "Host" : $"Player {id}";
+		if (id == LocalId && PortNames.MyName is { } me) return me;
+		return PortNames.Lookup(id) ?? PortNames.Fallback(id);
 	}
 
 	static ConfigFile Config()
@@ -116,7 +117,18 @@ static class PortMp
 		ulong id = ClientId();
 		PortHooks.NullPlayerId = id;
 		Log($"joining {ip}:{Port} as player {id} (this device: {wifi ?? "no Wi-Fi"}{(tailscale != null ? ", Tailscale " + tailscale : "")})");
-		await screen.JoinGameAsync(new ENetClientConnectionInitializer(id, ip, Port));
+		await PortNames.StartClient(ip, id);
+		await screen.JoinGameAsync(new TrackedConnection(new ENetClientConnectionInitializer(id, ip, Port)));
+	}
+
+	// Hands the joined game's service to PortKeepAlive, which keeps the session running while the app isn't in front.
+	sealed class TrackedConnection(IClientConnectionInitializer inner) : IClientConnectionInitializer
+	{
+		public Task<NetErrorInfo?> Connect(NetClientGameService gameService, System.Threading.CancellationToken cancelToken = default)
+		{
+			PortKeepAlive.Track(() => gameService.IsConnected);
+			return inner.Connect(gameService, cancelToken);
+		}
 	}
 
 	// ---- host ----
@@ -124,6 +136,8 @@ static class PortMp
 	static void OnHost(NetHostGameService service)
 	{
 		PortHooks.NullPlayerId = 0; // the ENet host is player 1, which is also the null platform's own id
+		PortNames.StartHost(service);
+		PortKeepAlive.Track(() => service.IsConnected);
 		int generation = ++_hostGeneration;
 		_ = HostBannerLoop(service, generation);
 	}

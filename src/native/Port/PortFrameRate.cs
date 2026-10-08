@@ -95,15 +95,20 @@ static class ObjC
 	// GDTView (drivers/apple_embedded/godot_view_apple_embedded.mm) owns the CADisplayLink that drives the game loop.
 	public static IntPtr GodotDisplayLink()
 	{
+		IntPtr view = GodotView();
+		return view == IntPtr.Zero ? IntPtr.Zero : Send(view, SelDisplayLink);
+	}
+
+	// Main thread.
+	public static IntPtr GodotView()
+	{
 		if (_view == IntPtr.Zero)
 		{
 			IntPtr app = Send(objc_getClass("UIApplication"), Sel("sharedApplication"));
 			IntPtr window = Send(Send(app, Sel("delegate")), Sel("window"));
 			_view = FindView(Send(Send(window, Sel("rootViewController")), Sel("view")), 0);
-			if (_view == IntPtr.Zero)
-				return IntPtr.Zero;
 		}
-		return Send(_view, SelDisplayLink);
+		return _view;
 	}
 
 	static IntPtr FindView(IntPtr view, int depth)
@@ -124,6 +129,9 @@ static class ObjC
 	}
 
 	public static void SetPreferredFrameRate(IntPtr displayLink, int rate) => SendRange(displayLink, SelSetRange, rate, rate, rate);
+
+	// UIApplicationState (main thread): 0 active, 1 inactive, 2 background.
+	public static nint ApplicationState() => SendNint(Send(objc_getClass("UIApplication"), Sel("sharedApplication")), Sel("applicationState"));
 
 	static IntPtr ProcessInfo() => Send(objc_getClass("NSProcessInfo"), Sel("processInfo"));
 

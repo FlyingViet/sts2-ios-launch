@@ -29,6 +29,11 @@ endorsed by Mega Crit.
     a PC can't join an iOS host. Players 5 and 6 sit beside the logs at rest sites and get their own relic
     in treasure rooms.
   - **Joining:** Multiplayer → Join, then enter the host's IP. The app remembers the last address.
+  - **Names:** players see each other's Steam names. Names come from the iOS host, so with a PC host
+    they show as "Host" / "Player 123456".
+  - **Keeps running when you leave the app:** during a multiplayer game, pulling down Notification Center or
+    switching apps doesn't pause the game for everyone else. The app uses iOS background audio (silent, and it
+    mixes with your music) only while a multiplayer game is connected.
   - **With a PC:** the PC must host, and PC-hosted games stay at 4 players. Add `--fastmp` to the game's
     Steam launch options, then use Multiplayer → Host on the PC.
   - **Versions:** everyone needs the same game version.
