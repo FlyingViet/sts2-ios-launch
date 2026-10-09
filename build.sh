@@ -31,6 +31,8 @@ Usage: ./build.sh --game <folder> [options]
   --xcode <path>      Xcode 26 app to build with (default: searched in /Applications and ~/Downloads).
   --icon game         Use the game's own pixel-art icon instead of rendering the Ironclad close-up.
   --clean             Delete build/work first (downloaded tools are kept).
+  --no-ota            Don't download script updates (see tools/ota.sh) in the app.
+  --ota-url <url>     Where the app looks for script updates (a fork's own "ota" release).
 
 Everything goes in build/ (or ~/Library/Caches/sts2-ios-launch if this folder's path contains a space).
 EOF
@@ -44,6 +46,7 @@ step() { echo "==> $*"; }
 
 GAME_DIR="${STS2_GAME_DIR:-}"; TEAM=""; UNSIGNED=0; INSTALL=0; DEVICE=""; BUNDLE_ID=""; XCODE_APP="${XCODE_APP:-}"
 ICON_MODE="ironclad"; CLEAN=0
+OTA=1; OTA_URL="https://github.com/FlyingViet/sts2-ios-launch/releases/download/ota/"
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--game) GAME_DIR="$2"; shift 2 ;;
@@ -55,6 +58,8 @@ while [[ $# -gt 0 ]]; do
 		--xcode) XCODE_APP="$2"; shift 2 ;;
 		--icon) ICON_MODE="$2"; shift 2 ;;
 		--clean) CLEAN=1; shift ;;
+		--no-ota) OTA=0; shift ;;
+		--ota-url) OTA_URL="$2"; shift 2 ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage; die "unknown option $1" ;;
 	esac
@@ -321,12 +326,23 @@ install_name_tool -id @rpath/sts2.framework/sts2 "$FRAMEWORK/sts2" 2>/dev/null
 # Add the port's scripts and settings (src/pck) to a copy of the game's pck, at the same res:// paths.
 # The game's release_info.json (its version, which multiplayer joins compare) normally sits next to the
 # executable; on iOS it's read from the pck instead (see src/patcher: ReleaseInfoManager).
-FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "${INFO:-no-release-info}" "$TOOLS_ID")"
+# Script updates (src/pck/port/ota.gd, tools/ota.sh): the app trusts packs signed with src/ota/public.pem that were
+# made for exactly this compiled code (OTA_COMPAT). built_at is when the scripts were added: older packs are ignored.
+OTA_COMPAT="$(bash "$ROOT/tools/ota.sh" id)"
+FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "${INFO:-no-release-info}" "$ROOT/src/ota" "ota $OTA $OTA_URL $OTA_COMPAT" "$TOOLS_ID")"
 if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 	step "Adding the port's files to the game data (about 2 GB)"
 	PF=()
 	while IFS= read -r f; do PF+=("--patch-file=$f=res://${f#$ROOT/src/pck/}"); done < <(find "$ROOT/src/pck" -type f ! -name '.DS_Store')
 	[[ -n "$INFO" ]] && PF+=("--patch-file=$INFO=res://port/release_info.json")
+	{
+		echo "[ota]"
+		echo "enabled=$([[ $OTA -eq 1 ]] && echo true || echo false)"
+		echo "url=\"$OTA_URL\""
+		echo "compat=\"$OTA_COMPAT\""
+		echo "built_at=$(date -u +%s)"
+	} > "$WORK/ota.cfg"
+	PF+=("--patch-file=$WORK/ota.cfg=res://port/ota.cfg" "--patch-file=$ROOT/src/ota/public.pem=res://port/ota_public.pem")
 	rm -f "$WORK/sts2.pck"
 	run pck-patch "$GDRE" --headless --pck-patch="$PCK" --output="$WORK/sts2.pck" "${PF[@]}"
 	[[ -f "$WORK/sts2.pck" ]] || die "pck patch produced no file (see $(show "$LOGS/pck-patch.log"))"
