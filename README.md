@@ -105,7 +105,19 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
 kept, and they're also in Steam Cloud.
 
 **To update** to the latest version of this repository, run `git pull` (or download the ZIP again), then the
-same build command. There's no in-app updater: iOS only runs code that was signed when the app was installed.
+same build command.
+
+**Script updates over the air:** fixes to the port's scripts (touch input, layout, menus, the multiplayer and
+Steam Cloud screens) are also published as small signed downloads. The app checks once per launch on the main menu,
+downloads a newer one in the background, and uses it from the next launch. Compiled code (the game patches, Steam
+Cloud, multiplayer, frame pacing) can't change this way, because iOS only runs code that was signed at install; when
+an update needs that, the app tells you to rebuild instead. Details:
+
+- Updates are signed with the repository owner's key, and the app only accepts updates made for exactly the code it
+  was built from, and newer than your build.
+- If an update ever stops the game from reaching the main menu, the next launch goes back to the built-in scripts.
+- To turn it off, build with `--no-ota`. A fork can point at its own release with `--ota-url` (and its own key, see
+  [`tools/ota.sh`](tools/ota.sh)).
 
 ### Without an Apple account in Xcode
 
@@ -125,6 +137,8 @@ same build command. There's no in-app updater: iOS only runs code that was signe
 | `--xcode <path>` | Which Xcode 26 to use, if it isn't found automatically. |
 | `--icon game` | Use the game's own pixel-art icon instead of the Ironclad close-up. |
 | `--clean` | Rebuild everything (downloaded tools are kept). |
+| `--no-ota` | Don't download script updates in the app. |
+| `--ota-url <url>` | Where the app looks for script updates. |
 
 ## Why Xcode 26
 
@@ -184,6 +198,7 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
    - the Steam Cloud screens
    - the multiplayer join and host screens
    - your copy's `release_info.json` (the game version that multiplayer compares)
+   - the script updater's settings and public key
 5. **App build:** builds and signs the app with Xcode.
 
 These tools are downloaded from their official sources during the build. None of them are included here:
