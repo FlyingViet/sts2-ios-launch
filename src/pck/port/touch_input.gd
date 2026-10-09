@@ -5,6 +5,8 @@ extends Node
 ## While a card is aiming at a target, the pointer snaps onto the nearest valid target's hitbox within
 ## SNAP_RADIUS (the finger hides the target and the arrow tip), except near the hand, so dragging back
 ## down still cancels.
+## While a finger is held down, tooltips move above and to the left of it, where the thumb doesn't cover them
+## (below and to the left near the top edge). Cards in the hand keep the game's placement beside the raised card.
 
 const LONG_PRESS_SEC := 0.35
 const DRAG_THRESHOLD_PX := 24.0 # raw window pixels (~8 pt on a 3x screen)
@@ -13,6 +15,10 @@ const CANCEL_CHECK_FRAMES := 3
 const DEBUG := false # logs geometry + saves user://port_shots/inspect_N.png during long-press
 const SNAP_RADIUS := 170.0 # canvas units from a target's hitbox
 const SNAP_HAND_ZONE := 0.25 # bottom part of the screen (hand, End Turn) where the pointer never snaps
+const TIP_GAP_LEFT := 40.0 # canvas units between the finger and the tooltips
+const TIP_GAP_ABOVE := 56.0
+const TIP_GAP_BELOW := 96.0 # the thumb's pad extends further below its contact point
+const TIP_EDGE := 8.0
 
 enum State { IDLE, PENDING, PRESSED, INSPECT }
 
@@ -29,12 +35,14 @@ var _shot_index := 0
 var _hand: Node = null # NPlayerHand (NMouseCardPlay is added as its child), tracked via node_added
 var _target_manager: Node = null # NTargetManager
 var _creatures: Array[Node] = [] # NCreature
+var _tip_sets: Array[Control] = [] # NHoverTipSet
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	get_window().window_input.connect(_on_window_input)
 	get_tree().node_added.connect(_on_node_added)
+	RenderingServer.frame_pre_draw.connect(_place_tips)
 	if DEBUG:
 		var w := get_window()
 		print("[PORT] window=", w.size, " content_scale=", w.content_scale_size, " visible_rect=",
@@ -170,6 +178,57 @@ func _on_node_added(node: Node) -> void:
 			_target_manager = node
 		"NCreature.cs":
 			_creatures.append(node)
+		"NHoverTipSet.cs":
+			_tip_sets.append(node as Control)
+
+
+# Before drawing (after the game placed or re-placed its tooltips this frame): move the tooltips shown for the held
+# finger, as one group, above and left of it. Tooltips that follow their owner are re-placed every frame by the game,
+# so this runs every frame and only moves what isn't already in place.
+func _place_tips() -> void:
+	var i := _tip_sets.size() - 1
+	while i >= 0:
+		if not is_instance_valid(_tip_sets[i]) or not _tip_sets[i].is_inside_tree():
+			_tip_sets.remove_at(i)
+		i -= 1
+	if _tip_sets.is_empty() or (_state != State.PENDING and _state != State.INSPECT):
+		return
+	var shown: Array[Control] = []
+	var r := Rect2()
+	var has_rect := false
+	for tips in _tip_sets:
+		if not tips.is_visible_in_tree():
+			continue
+		var owner_node = tips.get("_owner")
+		if owner_node is Node and _hand != null and is_instance_valid(_hand) and _hand.is_ancestor_of(owner_node):
+			continue
+		for c in tips.get_children():
+			var cc := c as Control
+			if cc == null or not cc.visible or cc.size.x <= 0.0 or cc.size.y <= 0.0:
+				continue
+			r = r.merge(cc.get_global_rect()) if has_rect else cc.get_global_rect()
+			has_rect = true
+		shown.append(tips)
+	if not has_rect:
+		return
+	var vp := get_viewport()
+	var finger: Vector2 = vp.get_final_transform().affine_inverse() * _mouse
+	var vis := vp.get_visible_rect()
+	var display := get_node_or_null("/root/PortDisplay")
+	var inset: float = display.get("_inset") if display != null else 0.0
+	var bottom: float = display.get("_bottom_margin") if display != null else 16.0
+	var lo := Vector2(vis.position.x + inset + TIP_EDGE, vis.position.y + TIP_EDGE)
+	var hi := Vector2(vis.end.x - inset - TIP_EDGE, vis.end.y - bottom)
+	var pos := Vector2(finger.x - TIP_GAP_LEFT - r.size.x, finger.y - TIP_GAP_ABOVE - r.size.y)
+	if pos.y < lo.y:
+		pos.y = finger.y + TIP_GAP_BELOW # no room above: below and to the left
+	pos.x = clampf(pos.x, lo.x, maxf(lo.x, hi.x - r.size.x))
+	pos.y = clampf(pos.y, lo.y, maxf(lo.y, hi.y - r.size.y))
+	var d := pos - r.position
+	if d.length_squared() < 0.25:
+		return
+	for tips in shown:
+		tips.global_position += d
 
 
 # Window position -> the same, or the centre of the nearest valid target's hitbox while targeting.
