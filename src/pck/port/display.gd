@@ -60,6 +60,10 @@ const INSPECT_TOP := 12.0 # space above the energy gem
 const INSPECT_GEM := 15.0 # the cost gem sticks out this far above the card frame (at scale 1)
 const INSPECT_GAP := 20.0 # card bottom to toggle
 
+# Act banner ("Act 1" over "Underdocks" when an act starts): NActBanner tweens the act number to y 440-450, just above
+# the act name on a 1080-tall canvas. On ours the name sits 60 higher and covered the number, so the number follows the
+# game's tween moved up by the same amount (_fix_act_banners).
+
 var _scene: Control = null # NCombatRoom's CombatSceneContainer
 var _shake: Node = null # NScreenShake: re-applies the scene's base position every frame
 var _top_row: Control = null # TopBar/LeftAlignedStuff
@@ -72,6 +76,7 @@ var _scene_logged := false
 var _bg_node: Node = null
 var _bg_cover := Rect2() # BgContainer-local rect every full-screen background layer covers
 var _inspect: Control = null # NInspectCardScreen
+var _act_banners: Array[Control] = [] # NActBanner
 
 var _inset := 0.0 # logical canvas units
 var _targets: Array[Control] = []
@@ -146,6 +151,11 @@ func _on_node_added(node: Node) -> void:
 			"NInspectCardScreen.cs":
 				_inspect = node as Control
 				return
+			"NActBanner.cs":
+				_act_banners.append(node as Control)
+				return
+			"NMainMenu.cs":
+				node.ready.connect(_hide_quit.bind(node), CONNECT_ONE_SHOT)
 	if BOTTOM_CLAMP.has(String(node.name)) and node.owner != null:
 		var owner_scr: Script = node.owner.get_script()
 		if owner_scr != null and owner_scr.resource_path.get_file() in BOTTOM_CLAMP[String(node.name)]:
@@ -370,6 +380,7 @@ static func _background_cover(bgc: Control, bg: Node) -> Rect2:
 func _before_draw() -> void:
 	_layout_combat()
 	_fit_inspect()
+	_fix_act_banners()
 	var vis := get_viewport().get_visible_rect().size
 	var vw := vis.x
 	var j := _bottom_clamped.size() - 1
@@ -392,6 +403,31 @@ func _before_draw() -> void:
 			var x := END_TURN_X_RATIO * vw - _inset
 			if not is_equal_approx(b.position.x, x):
 				b.position.x = x
+		i -= 1
+
+
+# iOS apps don't quit themselves (swipe the app away instead). The game never shows the button again.
+func _hide_quit(menu: Node) -> void:
+	var quit := menu.get_node_or_null("MainMenuTextButtons/QuitButton") as Control
+	if quit != null:
+		quit.visible = false
+
+
+func _fix_act_banners() -> void:
+	var i := _act_banners.size() - 1
+	while i >= 0:
+		var b := _act_banners[i]
+		if not is_instance_valid(b) or not b.is_inside_tree():
+			_act_banners.remove_at(i)
+		else:
+			var number := b.get_node_or_null("ActNumber") as Control
+			if number != null:
+				# The tween sets position.y in design units (440-450) every frame it runs: when it changed since our
+				# last write, move it up by how much higher the banner's centre is on this canvas.
+				var written: float = number.get_meta("port_written", INF)
+				if not is_equal_approx(number.position.y, written):
+					number.position.y += (b.size.y - DESIGN_HEIGHT) / 2.0
+					number.set_meta("port_written", number.position.y)
 		i -= 1
 
 
