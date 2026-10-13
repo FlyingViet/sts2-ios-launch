@@ -105,6 +105,7 @@ static unsafe class PortPerf
 		double now = Clock.Elapsed.TotalMilliseconds, dt = now - _lastMs;
 		_lastMs = now;
 		PortFrameRate.Update();
+		PortGcPacer.Update(now);
 		_frames.Add(dt);
 		_logic.Add(_logicMs);
 		_render.Add(_renderMs);
@@ -129,11 +130,14 @@ static unsafe class PortPerf
 				$"vram={RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.VideoMemUsed) / 1048576}MB display={PortFrameRate.DisplayRate}Hz " +
 				$"idle={100 * PortFrameRate.IdleFrames / Math.Max(1, PortFrameRate.IdleFrames + PortFrameRate.FullFrames)}% " +
 				$"busy(touch/tween)={PortFrameRate.TouchBusy}/{PortFrameRate.TweenBusy} tweens<={PortFrameRate.MaxTweens} oldest={PortFrameRate.OldestTween:F0}s " +
+				$"paced={PortGcPacer.Paced} ({PortGcPacer.PausedMs:F0}ms, max {PortGcPacer.MaxPauseMs:F0}, full {PortGcPacer.Full}) overflows={PortGcPacer.Overflows} " +
 				$"thermal={ObjC.ThermalState()}{(ObjC.LowPowerMode() ? " lowPower" : "")}");
 			_frames.Clear(); _logic.Clear(); _render.Clear();
 			PortFrameRate.IdleFrames = PortFrameRate.FullFrames = 0;
 			PortFrameRate.TouchBusy = PortFrameRate.TweenBusy = PortFrameRate.MaxTweens = 0;
 			PortFrameRate.OldestTween = 0;
+			PortGcPacer.Paced = PortGcPacer.Full = PortGcPacer.Overflows = 0;
+			PortGcPacer.PausedMs = PortGcPacer.MaxPauseMs = 0;
 			_windowStartMs = now; _wg0 = _wg1 = _wg2 = 0; _wPause = TimeSpan.Zero; _wPipe = 0;
 		}
 	}

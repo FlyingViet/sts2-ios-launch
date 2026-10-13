@@ -27,9 +27,14 @@ static class PortFrameRate
 
 	const double TouchHoldMs = 1500, IdleAfterMs = 2000, AmbientTweenSec = 2.5, StuckTweenMs = 1500;
 	static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
-	static double _lastInputMs, _lastBusyMs;
+	static double _lastInputMs, _lastBusyMs, _lastTweenMs;
 	static int _touches, _frame;
 	static bool _tweening;
+
+	// For PortGcPacer: how long since a finger was on the screen / any input arrived, and since an animation ran.
+	internal static bool FingerDown => _touches > 0;
+	internal static double MsSinceInput => Clock.Elapsed.TotalMilliseconds - _lastInputMs;
+	internal static double MsSinceTween => Clock.Elapsed.TotalMilliseconds - _lastTweenMs;
 
 	static int _limit, _refresh;
 	static readonly System.Collections.Generic.Dictionary<ulong, (double Age, double Since)> _progress = new();
@@ -99,15 +104,16 @@ static class PortFrameRate
 			_refresh = Math.Max(60, (int)Math.Round(DisplayServer.ScreenGetRefreshRate()));
 		int full = Pacing ? RateFor(_limit, _refresh) : _refresh;
 		int rate = full;
+		double now = Clock.Elapsed.TotalMilliseconds;
+		if ((_frame++ & 1) == 0) _tweening = Tweening(); // every other frame is plenty
+		if (_tweening) _lastTweenMs = now;
+		bool touch = _touches > 0 || now - _lastInputMs < TouchHoldMs;
+		if (touch || _tweening)
+			_lastBusyMs = now;
 		if (Adaptive && Pacing && full > 60)
 		{
-			double now = Clock.Elapsed.TotalMilliseconds;
-			if ((_frame++ & 1) == 0) _tweening = Tweening(); // every other frame is plenty
-			bool touch = _touches > 0 || now - _lastInputMs < TouchHoldMs;
 			if (touch) TouchBusy++;
 			if (_tweening) TweenBusy++;
-			if (touch || _tweening)
-				_lastBusyMs = now;
 			if (now - _lastBusyMs > IdleAfterMs)
 				rate = RateFor(60, _refresh);
 		}

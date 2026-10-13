@@ -229,7 +229,32 @@ if [[ ! -f "$TOOLS/spine/.ok-$SPINE_VERSION-$GODOT_VERSION" ]]; then
 	rm -rf "$TOOLS/spine-zip"
 	touch "$TOOLS/spine/.ok-$SPINE_VERSION-$GODOT_VERSION"
 fi
-TOOLS_ID="godot $GODOT_VERSION dotnet $DOTNET_VERSION gdre $GDRE_VERSION fmod $FMOD_GDE_VERSION spine $SPINE_VERSION"
+# The prebuilt spine-godot GDExtension reads every re-created mesh back from the GPU (RenderingServer.mesh_get_surface,
+# which waits for all frames in flight): a 30-40 ms freeze on an iPhone whenever an attack or hit animation changes a
+# mesh. Rebuild its iOS library from the same 4.2 sources with src/spine/no-gpu-readback.patch.
+SPINE_SRC_COMMIT="e7dc1435fa4a0083ab431f1b28e083c14a1f5c68"
+GODOT_CPP_COMMIT="27d9dd23c83871e0619fca5dc2cddfbfd69e926a" # godot-cpp 4.5 branch
+SPINE_PATCH_ID="$(shasum "$ROOT/src/spine/no-gpu-readback.patch" | cut -c1-12)"
+SPINE_IOS_LIB="$TOOLS/spine/ios/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release"
+if [[ ! -f "$TOOLS/spine/.ok-ios-${SPINE_SRC_COMMIT:0:12}-$SPINE_PATCH_ID" ]]; then
+	step "Building spine-godot for iOS from source (~2 min)"
+	S="$TOOLS/spine-build"; rm -rf "$S" && mkdir -p "$S"
+	R="$S/spine-runtimes"
+	run spine-clone git clone -q --filter=blob:none --no-checkout https://github.com/EsotericSoftware/spine-runtimes.git "$R"
+	run spine-sparse git -C "$R" sparse-checkout set spine-godot spine-cpp/spine-cpp
+	run spine-checkout git -C "$R" checkout -q "$SPINE_SRC_COMMIT"
+	run spine-patch git -C "$R" apply "$ROOT/src/spine/no-gpu-readback.patch"
+	run godot-cpp-clone git clone -q --filter=blob:none https://github.com/godotengine/godot-cpp.git "$R/spine-godot/godot-cpp"
+	run godot-cpp-checkout git -C "$R/spine-godot/godot-cpp" checkout -q "$GODOT_CPP_COMMIT"
+	cp -R "$R/spine-cpp/spine-cpp" "$R/spine-godot/spine_godot/"
+	run scons-venv python3 -m venv "$S/venv"
+	run scons-install "$S/venv/bin/pip" install -q "scons==4.11.1"
+	(cd "$R/spine-godot" && run spine-scons "$S/venv/bin/scons" -j"$(sysctl -n hw.ncpu)" platform=ios target=template_release)
+	cp "$R/spine-godot/bin/ios/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release" "$SPINE_IOS_LIB"
+	rm -rf "$S"
+	touch "$TOOLS/spine/.ok-ios-${SPINE_SRC_COMMIT:0:12}-$SPINE_PATCH_ID"
+fi
+TOOLS_ID="godot $GODOT_VERSION dotnet $DOTNET_VERSION gdre $GDRE_VERSION fmod $FMOD_GDE_VERSION spine $SPINE_VERSION ios ${SPINE_SRC_COMMIT:0:12} $SPINE_PATCH_ID"
 PCK_ID="$(stat -f '%z %m' "$PCK") $PCK"
 
 # ---------------------------------------------------------------------------------------------------- icon
