@@ -181,7 +181,10 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
 (`sts2.dll`) don't depend on the platform, so the build assembles them into an iOS app:
 
 1. **Engine:** exports an empty Godot 4.5.1 C# project ([`src/godot`](src/godot)) for iOS. That produces an
-   Xcode project with the stock iOS engine and the FMOD and Spine extensions the game uses.
+   Xcode project with the stock iOS engine and the FMOD and Spine extensions the game uses. Spine's iOS library
+   is rebuilt from its 4.2 source with [`src/spine/no-gpu-readback.patch`](src/spine/no-gpu-readback.patch):
+   the prebuilt one reads each changed character mesh back from the GPU, which froze the game for 30–40 ms on
+   attacks and hits.
 2. **Patching:** patches the game's `sts2.dll` with Mono.Cecil ([`src/patcher`](src/patcher)) to add hooks for
    Steam Cloud saves and direct-IP multiplayer (including the 6-player limit), to read the game's version from
    the app, to default to 120 FPS, and to make a few fixes for iOS.
@@ -191,7 +194,8 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
      the iOS Keychain.
    - a side channel for multiplayer on UDP port 33772, next to the game's own 33771. It carries player names,
      Wi-Fi game discovery, and a light heartbeat that keeps the iPhone's Wi-Fi from dozing between moves.
-   - frame pacing, and the background keep-alive used during multiplayer.
+   - frame pacing, garbage collection moved to calm moments (no finger down, nothing animating) so it doesn't
+     interrupt animations, and the background keep-alive used during multiplayer.
 4. **Data:** adds the port's settings and scripts ([`src/pck`](src/pck)) to a copy of the game's `.pck`:
    - touch input
    - display and safe-area layout
@@ -208,8 +212,9 @@ These tools are downloaded from their official sources during the build. None of
 - [GDRE Tools](https://github.com/GDRETools/gdsdecomp)
 - [fmod-gdextension](https://github.com/utopia-rise/fmod-gdextension), which includes FMOD, under
   [FMOD's license](https://www.fmod.com/licensing)
-- [spine-godot](https://esotericsoftware.com/spine-godot), under the
-  [Spine Runtimes license](https://esotericsoftware.com/spine-runtimes-license)
+- [spine-godot](https://esotericsoftware.com/spine-godot) (prebuilt, and its source for the iOS library), under the
+  [Spine Runtimes license](https://esotericsoftware.com/spine-runtimes-license), built with
+  [godot-cpp](https://github.com/godotengine/godot-cpp) and [SCons](https://scons.org)
 
 ## Credits
 

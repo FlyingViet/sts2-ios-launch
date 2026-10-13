@@ -299,5 +299,10 @@ func _debug_capture() -> void:
 
 
 func _emit(ev: InputEvent) -> void:
-	# Deferred so synthesized events never re-enter the viewport while it is dispatching a touch.
-	Input.call_deferred("parse_input_event", ev)
+	# With accumulated input (Godot's default) parse_input_event only queues the event, and Input.flush_buffered_events
+	# delivers it right after the touch being dispatched now, in the same frame. Deferring it would cost a frame.
+	# Without accumulation the event would re-enter the viewport mid-dispatch, so defer then.
+	if Input.use_accumulated_input:
+		Input.parse_input_event(ev)
+	else:
+		Input.call_deferred("parse_input_event", ev)

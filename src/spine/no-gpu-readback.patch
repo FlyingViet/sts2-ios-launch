@@ -1,0 +1,58 @@
+diff --git a/spine-godot/spine_godot/SpineSprite.cpp b/spine-godot/spine_godot/SpineSprite.cpp
+index 59fa4d9..a96e40a 100644
+--- a/spine-godot/spine_godot/SpineSprite.cpp
++++ b/spine-godot/spine_godot/SpineSprite.cpp
+@@ -41,6 +41,7 @@
+ #include <godot_cpp/variant/array.hpp>
+ #include <godot_cpp/classes/mesh.hpp>
+ #include <godot_cpp/classes/rendering_server.hpp>
++#include <godot_cpp/variant/utility_functions.hpp>
+ #ifdef TOOLS_ENABLED
+ #include <godot_cpp/classes/editor_interface.hpp>
+ #endif
+@@ -243,15 +244,41 @@ void SpineMesh2D::update_mesh(const PackedVector2Array &vertices,
+ 		arrays[Mesh::ARRAY_COLOR] = colors;
+ 		arrays[Mesh::ARRAY_INDEX] = indices;
+ 		RS::get_singleton()->mesh_add_surface_from_arrays(mesh, RS::PrimitiveType::PRIMITIVE_TRIANGLES, arrays, Array(), Dictionary(), RS::ArrayFormat::ARRAY_FLAG_USE_DYNAMIC_UPDATE);
+-		Dictionary surface = RS::get_singleton()->mesh_get_surface(mesh, 0);
+-		RS::ArrayFormat surface_format = (RS::ArrayFormat) static_cast<int64_t>(surface["format"]);
++		// iOS port: mesh_get_surface() reads the vertex and attribute buffers back from the GPU, and
++		// RenderingDevice::buffer_get_data() waits for every frame in flight first (30-40 ms on an iPhone, each time an
++		// animation changes a mesh's vertex count). The buffers are only scratch space that every update rewrites in
++		// full, and the format is what mesh_add_surface_from_arrays derives from these arrays, so compute both on the
++		// CPU. The first mesh is still read back once to check the computed layout; on a mismatch, keep reading back.
++		static int layout_check = 0; // 0 unchecked, 1 computed layout verified, -1 mismatch: always read back
++		const int64_t computed_format = RS::ARRAY_FORMAT_VERTEX | RS::ARRAY_FORMAT_TEX_UV | RS::ARRAY_FORMAT_COLOR | RS::ARRAY_FORMAT_INDEX | RS::ARRAY_FLAG_USE_2D_VERTICES | RS::ARRAY_FLAG_USE_DYNAMIC_UPDATE;
++		const int64_t layout_mask = RS::ARRAY_FORMAT_VERTEX | RS::ARRAY_FORMAT_NORMAL | RS::ARRAY_FORMAT_TANGENT | RS::ARRAY_FORMAT_COLOR | RS::ARRAY_FORMAT_TEX_UV | RS::ARRAY_FORMAT_TEX_UV2 | RS::ARRAY_FORMAT_CUSTOM0 | RS::ARRAY_FORMAT_CUSTOM1 | RS::ARRAY_FORMAT_CUSTOM2 | RS::ARRAY_FORMAT_CUSTOM3 | RS::ARRAY_FORMAT_BONES | RS::ARRAY_FORMAT_WEIGHTS | RS::ARRAY_FORMAT_INDEX | RS::ARRAY_FLAG_USE_2D_VERTICES | RS::ARRAY_FLAG_USE_DYNAMIC_UPDATE | RS::ARRAY_FLAG_COMPRESS_ATTRIBUTES;
++		Dictionary surface;
++		int64_t format_bits = computed_format;
++		if (layout_check != 1) {
++			surface = RS::get_singleton()->mesh_get_surface(mesh, 0);
++			format_bits = static_cast<int64_t>(surface["format"]);
++		}
++		RS::ArrayFormat surface_format = (RS::ArrayFormat) format_bits;
+ 		surface_offsets[RS::ARRAY_VERTEX] = RS::get_singleton()->mesh_surface_get_format_offset(surface_format, vertices.size(), RS::ARRAY_VERTEX);
+ 		surface_offsets[RS::ARRAY_COLOR] = RS::get_singleton()->mesh_surface_get_format_offset(surface_format, vertices.size(), RS::ARRAY_COLOR);
+ 		surface_offsets[RS::ARRAY_TEX_UV] = RS::get_singleton()->mesh_surface_get_format_offset(surface_format, vertices.size(), RS::ARRAY_TEX_UV);
+ 		vertex_stride = RS::get_singleton()->mesh_surface_get_format_vertex_stride(surface_format, vertices.size());
+ 		attribute_stride = RS::get_singleton()->mesh_surface_get_format_attribute_stride(surface_format, vertices.size());
+-		vertex_buffer = surface["vertex_data"];
+-		attribute_buffer = surface["attribute_data"];
++		if (layout_check == 1) {
++			vertex_buffer.resize(int64_t(vertex_stride) * vertices.size());
++			attribute_buffer.resize(int64_t(attribute_stride) * vertices.size());
++		} else {
++			vertex_buffer = surface["vertex_data"];
++			attribute_buffer = surface["attribute_data"];
++			if (layout_check == 0) {
++				bool same = (format_bits & layout_mask) == computed_format &&
++							vertex_buffer.size() == int64_t(vertex_stride) * vertices.size() &&
++							attribute_buffer.size() == int64_t(attribute_stride) * vertices.size();
++				layout_check = same ? 1 : -1;
++				UtilityFunctions::print(same ? "[PORT] spine: mesh layout computed on the CPU (no GPU readback)"
++											 : "[PORT] spine: unexpected mesh layout, keeping GPU readback");
++			}
++		}
+ 		num_vertices = vertices.size();
+ 		num_indices = indices.size();
+ 		indices_changed = false;
