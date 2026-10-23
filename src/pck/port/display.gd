@@ -29,10 +29,12 @@ const INSET_TARGETS := {
 	"ReleaseInfo": "MainMenu",
 	"ModdedWarning": "MainMenu",
 	"ModWarningContainer": "MainMenu",
+	"DrawingTools": "", # map screen draw/erase/clear, bottom-left
 }
 # NEndTurnButton places itself at a fixed fraction of the viewport width (1604/1920), so it is
 # pulled in by the inset right before drawing (after tweens have run).
 const END_TURN_X_RATIO := 1604.0 / 1920.0
+const BACK_HIDE_OFFSET := Vector2(-180, 0) # NBackButton._hideOffset
 # Nodes the game tweens to absolute y positions designed for a 1080-tall canvas. Key = node name,
 # value = script file of the scene root that owns it. Clamped so their bottom stays on screen.
 const BOTTOM_CLAMP := {
@@ -77,8 +79,20 @@ var _bg_node: Node = null
 var _bg_cover := Rect2() # BgContainer-local rect every full-screen background layer covers
 var _inspect: Control = null # NInspectCardScreen
 var _act_banners: Array[Control] = [] # NActBanner
+var _piles: Array[Control] = [] # combat draw/discard/exhaust pile buttons
+var _hand_box: Control = null # NPlayerHand's CardHolderContainer
+var _hand_k := 1.0 # our scale for it
+var _hand_shift := 0.0 # and horizontal shift, canvas units
+var _hand_card_half := 0.0 # half a card's width at scale 1, measured from the first card seen
+var _hand_logged := ""
+var _hand_room := Vector2(-INF, INF) # widest HUD extents seen (the energy orb pulses), reset per combat and canvas
+var _hand_room_for := ""
 
-var _inset := 0.0 # logical canvas units
+# Safe-area insets in logical canvas units. Each side on its own: on an iPhone Duo's outer screen the camera and
+# status column is on one side only, and turning the phone over moves it to the other.
+var _inset_left := 0.0
+var _inset_right := 0.0
+var _last_safe := Rect2i()
 var _targets: Array[Control] = []
 var _back_buttons: Array[Control] = [] # NBackButton: slides between _showPos/_hidePos (set in its _Ready)
 var _end_turn_buttons: Array[Control] = []
@@ -97,7 +111,10 @@ func _ready() -> void:
 		var n := FileAccess.get_file_as_string(SHOT_FLAG).strip_edges().to_int()
 		_shots_left = n if n > 0 else 5
 		DirAccess.remove_absolute(SHOT_FLAG)
-	_enforce() # computes _inset before any game UI is added
+	_enforce() # computes the insets before any game UI is added
+	# Connected before any game node: on a resize (an iPhone Duo opening or closing) the content scale size is
+	# updated before the game's own size_changed handlers read it.
+	get_tree().root.size_changed.connect(_enforce)
 	get_tree().node_added.connect(_on_node_added)
 	RenderingServer.frame_pre_draw.connect(_before_draw)
 
@@ -138,6 +155,11 @@ func _on_node_added(node: Node) -> void:
 			var orig_y: Vector2 = holder.get_meta("port_orig_y")
 			holder.offset_top = orig_y.x - HAND_RAISE
 			holder.offset_bottom = orig_y.y - HAND_RAISE
+			if not holder.has_meta("port_orig_x"):
+				holder.set_meta("port_orig_x", Vector2(holder.offset_left, holder.offset_right))
+			_hand_box = holder
+			_hand_k = 1.0
+			_hand_shift = 0.0
 			return
 	var scr: Script = node.get_script()
 	if scr != null:
@@ -153,6 +175,9 @@ func _on_node_added(node: Node) -> void:
 				return
 			"NActBanner.cs":
 				_act_banners.append(node as Control)
+				return
+			"NDrawPileButton.cs", "NDiscardPileButton.cs", "NExhaustPileButton.cs":
+				_piles.append(node as Control)
 				return
 			"NMainMenu.cs":
 				node.ready.connect(_hide_quit.bind(node), CONNECT_ONE_SHOT)
@@ -202,9 +227,9 @@ func _shift_star(star: Control) -> void:
 func _edge_delta(anchor: float) -> float:
 	# Left-anchored edges move right, right-anchored edges move left, centred edges stay.
 	if anchor < 0.4:
-		return _inset
+		return _inset_left
 	if anchor > 0.6:
-		return -_inset
+		return -_inset_right
 	return 0.0
 
 
@@ -379,6 +404,8 @@ static func _background_cover(bgc: Control, bg: Node) -> Rect2:
 
 func _before_draw() -> void:
 	_layout_combat()
+	_fit_hand()
+	_fix_piles()
 	_fit_inspect()
 	_fix_act_banners()
 	var vis := get_viewport().get_visible_rect().size
@@ -400,10 +427,149 @@ func _before_draw() -> void:
 		if not is_instance_valid(b) or not b.is_inside_tree():
 			_end_turn_buttons.remove_at(i)
 		else:
-			var x := END_TURN_X_RATIO * vw - _inset
+			var x := END_TURN_X_RATIO * vw - _inset_right
 			if not is_equal_approx(b.position.x, x):
 				b.position.x = x
 		i -= 1
+
+
+# Hand of cards on squarer screens (an iPhone Duo; the canvas is MIN_WIDTH wide): the game spreads cards at fixed
+# offsets from the bottom centre (HandPosHelper), so with the safe-area insets the fan ran into the energy orb or the
+# End Turn button. Keep it between them: shift it as little as needed, then shrink it (down to HAND_MIN_SCALE).
+# Wide phones keep the game's layout.
+const HAND_X_EXTENT := [0.0, 100.0, 180.0, 240.0, 340.0, 460.0, 534.0, 565.0, 600.0, 610.0] # outermost card centre
+const HAND_GAP := 12.0 # canvas units kept clear between the hand and the HUD on either side
+const HAND_TILT_MARGIN := 20.0 # outer cards are tilted, so their corners reach a little further
+const HAND_MIN_SCALE := 0.7
+
+func _fit_hand() -> void:
+	if _hand_box == null:
+		return
+	if not is_instance_valid(_hand_box) or not _hand_box.is_inside_tree():
+		_hand_box = null
+		return
+	var vis := get_viewport().get_visible_rect().size
+	var k := 1.0
+	var shift := 0.0
+	var holders := _hand_box.get_children().filter(func(h): return h is Control)
+	var n := mini(holders.size(), HAND_X_EXTENT.size())
+	var ui := _hand_box.get_parent().get_parent() if _hand_box.get_parent() != null else null
+	if vis.x <= MIN_WIDTH + 1.0 and n > 0 and ui != null and _hand_box.is_visible_in_tree():
+		if _hand_card_half <= 0.0:
+			for c in (holders[0] as Control).get_children():
+				if c is Control and (c as Control).size.x > 50.0:
+					_hand_card_half = (c as Control).size.x * 0.5 * absf((c as Control).scale.x)
+					print("[PORT] hand: card half-width ", _hand_card_half)
+					break
+		var card_scale := 0.8 * ([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.95, 0.9, 0.85][n - 1] as float)
+		var half: float = HAND_X_EXTENT[n - 1] + (_hand_card_half if _hand_card_half > 0.0 else 150.0) * card_scale \
+			+ HAND_TILT_MARGIN
+		var left := 0.0
+		var right := vis.x
+		var energy := ui.get_node_or_null("EnergyCounterContainer") as Control
+		if energy != null:
+			left = maxf(left, _visible_extent(energy, true))
+		var end_turn := ui.get_node_or_null("EndTurnButton") as Control
+		if end_turn != null and end_turn.is_visible_in_tree():
+			right = minf(right, _global_rect(end_turn).position.x)
+		var piles := ui.get_node_or_null("CombatPileContainer")
+		if piles != null:
+			for pile_name in ["DrawPile", "DiscardPile", "ExhaustPile"]:
+				var pile := piles.get_node_or_null(pile_name) as Control
+				if pile != null and pile.is_visible_in_tree():
+					var r := _global_rect(pile)
+					if r.get_center().x < vis.x * 0.5:
+						left = maxf(left, r.end.x)
+					else:
+						right = minf(right, r.position.x)
+		var room_for := "%s %s %s" % [_hand_box.get_instance_id(), vis, _last_safe]
+		if room_for != _hand_room_for:
+			_hand_room_for = room_for
+			_hand_room = Vector2(-INF, INF)
+		_hand_room = Vector2(maxf(_hand_room.x, left), minf(_hand_room.y, right))
+		left = _hand_room.x
+		right = _hand_room.y
+		var avail := right - left - 2.0 * HAND_GAP
+		k = clampf(avail / (2.0 * half), HAND_MIN_SCALE, 1.0)
+		var lo := left + HAND_GAP + half * k - vis.x * 0.5 # allowed range for the shift
+		var hi := right - HAND_GAP - half * k - vis.x * 0.5
+		shift = clampf(0.0, lo, hi) if lo <= hi else (lo + hi) * 0.5
+		var key := "%d %.2f %.0f" % [n, snappedf(k, 0.05), snappedf(shift, 20.0)]
+		if key != _hand_logged:
+			_hand_logged = key
+			print("[PORT] hand: %d cards, room %.0f-%.0f -> scale %.2f shift %.0f" % [n, left, right, k, shift])
+	# Ease towards the target (drawn and played cards change it), quickly enough to follow the game's own tweens.
+	var step := 0.25
+	_hand_k = k if absf(_hand_k - k) < 0.002 else lerpf(_hand_k, k, step)
+	_hand_shift = shift if absf(_hand_shift - shift) < 0.5 else lerpf(_hand_shift, shift, step)
+	if not is_equal_approx(_hand_box.scale.x, _hand_k):
+		_hand_box.scale = Vector2(_hand_k, _hand_k)
+	var orig_x: Vector2 = _hand_box.get_meta("port_orig_x", Vector2.ZERO)
+	if not is_equal_approx(_hand_box.offset_left, orig_x.x + _hand_shift):
+		_hand_box.offset_left = orig_x.x + _hand_shift
+		_hand_box.offset_right = orig_x.y + _hand_shift
+
+
+# Right (or left) edge of the visible content under `root`, e.g. the energy orb under its zero-size container.
+static func _visible_extent(root: Control, right_edge: bool) -> float:
+	var edge := -INF if right_edge else INF
+	for c in root.find_children("*", "Control", true, false):
+		var cc := c as Control
+		if cc.is_visible_in_tree() and cc.size.x > 1.0 and cc.size.y > 1.0:
+			var r := _global_rect(cc)
+			edge = maxf(edge, r.end.x) if right_edge else minf(edge, r.position.x)
+	return edge if is_finite(edge) else (_global_rect(root).end.x if right_edge else _global_rect(root).position.x)
+
+
+# Combat pile buttons slide between a shown and a hidden spot that the game works out once (in _Ready; the exhaust
+# pile from the whole canvas): after a resize (an iPhone Duo opening or closing) or with a safe-area inset, the shown
+# spot is off and the hidden one is on screen (they peeked out on the map). Recompute both from the container's
+# current size and move a pile that rests at an old spot.
+const PILE_HIDE := {
+	"NDrawPileButton.cs": Vector2(-150, 100),
+	"NDiscardPileButton.cs": Vector2(150, 100),
+	"NExhaustPileButton.cs": Vector2(150, 0),
+}
+
+func _fix_piles() -> void:
+	var i := _piles.size() - 1
+	while i >= 0:
+		var p := _piles[i]
+		i -= 1
+		if not is_instance_valid(p) or not p.is_inside_tree():
+			_piles.remove_at(i + 1)
+			continue
+		var parent := p.get_parent() as Control
+		var show = p.get("_showPosition")
+		var hide = p.get("_hidePosition")
+		if parent == null or not p.is_node_ready() or not (show is Vector2) or not (hide is Vector2):
+			continue
+		var kind: String = p.get_script().resource_path.get_file()
+		if not p.has_meta("port_pile_gap"):
+			# The game's own spot, as distances from the container's corners.
+			var off = p.get("_posOffset") if kind == "NExhaustPileButton.cs" else null
+			p.set_meta("port_pile_gap", Vector3(show.x, parent.size.x - show.x, parent.size.y - show.y) \
+				if not (off is Vector2) else Vector3(0, off.x, off.y))
+		var gap: Vector3 = p.get_meta("port_pile_gap")
+		var want_show := Vector2(gap.x if kind == "NDrawPileButton.cs" else parent.size.x - gap.y, parent.size.y - gap.z)
+		var away: Vector2 = PILE_HIDE[kind]
+		away.x += -_inset_left if away.x < 0.0 else _inset_right # all the way off screen
+		var want_hide := want_show + away
+		if not want_show.is_equal_approx(show) or not want_hide.is_equal_approx(hide):
+			# Old spots: the game's (the exhaust pile recomputes its own on a resize) and the ones set here before.
+			var prev: Array = [[show, hide]]
+			if p.has_meta("port_pile_last"):
+				prev.append(p.get_meta("port_pile_last"))
+			p.set_meta("port_pile_prev", prev)
+			p.set_meta("port_pile_last", [want_show, want_hide])
+			p.set("_showPosition", want_show)
+			p.set("_hidePosition", want_hide)
+		for pair in p.get_meta("port_pile_prev", []):
+			# Resting at an old spot (or a tween ending there): move it to the new one.
+			if p.position.is_equal_approx(pair[0]) and not pair[0].is_equal_approx(want_show):
+				p.position = want_show
+			elif p.position.is_equal_approx(pair[1]) and not pair[1].is_equal_approx(want_hide):
+				p.position = want_hide
 
 
 # iOS apps don't quit themselves (swipe the app away instead). The game never shows the button again.
@@ -502,24 +668,19 @@ func _apply_insets() -> void:
 
 
 func _shift_back_button(b: Control) -> void:
+	# NBackButton puts itself at (0, ContentScaleSize.Y) - _posOffset, i.e. assumes the canvas is exactly as tall as
+	# the content scale size (not so on squarer screens with Expand, e.g. an iPhone Duo, until _enforce catches up
+	# after a resize). Recompute that from the real canvas height, plus the safe-area inset.
 	var show_pos = b.get("_showPos")
-	var hide_pos = b.get("_hidePos")
-	if not (show_pos is Vector2) or not (hide_pos is Vector2):
+	var pos_offset = b.get("_posOffset")
+	if not (show_pos is Vector2) or not (pos_offset is Vector2):
 		return
-	var applied: float = b.get_meta("port_shift", 0.0)
-	var base_x: float = b.get_meta("port_show_x", INF)
-	if applied != 0.0 and not is_equal_approx(show_pos.x, base_x + applied):
-		applied = 0.0 # the game recomputed its positions (e.g. on resize)
-	if applied == 0.0:
-		base_x = show_pos.x
-	if is_equal_approx(applied, _inset):
+	var want: Vector2 = Vector2(_inset_left, get_viewport().get_visible_rect().size.y) - pos_offset
+	if want.is_equal_approx(show_pos):
 		return
-	var d := _inset - applied
-	b.set("_showPos", show_pos + Vector2(d, 0))
-	b.set("_hidePos", hide_pos + Vector2(d, 0))
-	b.position.x += d
-	b.set_meta("port_show_x", base_x)
-	b.set_meta("port_shift", _inset)
+	b.set("_showPos", want)
+	b.set("_hidePos", want + BACK_HIDE_OFFSET)
+	b.position += want - show_pos
 
 
 func _process(delta: float) -> void:
@@ -536,18 +697,29 @@ func _process(delta: float) -> void:
 
 func _enforce() -> void:
 	var w := get_window()
+	# Wide phones: 960 tall, width expands. Squarer screens (an iPhone Duo, iPads): 1680 wide, height expands; the
+	# content scale height then follows the canvas, since the game reads it as the canvas height (NBackButton).
 	var size := Vector2i(MIN_WIDTH, UI_HEIGHT)
+	if w.size.x > 0 and w.size.y > 0 and w.size.x * UI_HEIGHT < w.size.y * MIN_WIDTH:
+		size.y = roundi(float(MIN_WIDTH) * w.size.y / w.size.x)
 	if w.content_scale_aspect != Window.CONTENT_SCALE_ASPECT_EXPAND or w.content_scale_size != size:
 		w.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
 		w.content_scale_size = size
 	var rect := get_viewport().get_visible_rect()
-	if rect != _last_rect:
+	var safe := DisplayServer.get_display_safe_area()
+	if rect != _last_rect or safe != _last_safe:
 		_last_rect = rect
-		var safe := DisplayServer.get_display_safe_area()
-		var raw_inset := maxf(safe.position.x, w.size.x - safe.end.x)
-		_inset = raw_inset * rect.size.y / w.size.y # raw px -> logical canvas units
-		_bottom_margin = maxf(16.0, (w.size.y - safe.end.y) * rect.size.y / w.size.y)
-		print("[PORT] canvas ", rect.size, " (window ", w.size, ") safe inset ", raw_inset, "px = ", _inset)
+		_last_safe = safe
+		var k := rect.size.y / w.size.y # raw px -> logical canvas units
+		var left := maxi(0, safe.position.x)
+		var right := maxi(0, w.size.x - safe.end.x)
+		var bottom := maxi(0, w.size.y - safe.end.y)
+		_inset_left = left * k
+		_inset_right = right * k
+		_bottom_margin = maxf(16.0, bottom * k)
+		print("[PORT] canvas ", rect.size, " (window ", w.size, ") safe insets px left ", left, " right ", right,
+			" top ", safe.position.y, " bottom ", bottom, " = units ", snappedf(_inset_left, 0.1), " / ",
+			snappedf(_inset_right, 0.1))
 
 
 func _capture() -> void:

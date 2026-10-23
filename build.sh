@@ -27,8 +27,12 @@ Usage: ./build.sh --game <folder> [options]
   --unsigned          Make an unsigned .ipa for Sideloadly/AltStore instead of signing with Xcode.
   --install           Install on the connected iPhone/iPad after building (signed builds only).
   --device <udid>     Which device to install on (default: the first connected one).
+  --simulator         Build for the iOS Simulator on an Apple silicon Mac instead, e.g. to check layouts on the
+                      iPhone Duo Simulator (Xcode 27.1+). With --install, installs on --device <simulator udid> or
+                      the booted Simulator. Rendering there is only approximate (src/ios/simulator_metal.m).
   --bundle-id <id>    App bundle ID. Default: com.sts2ios.<team id> (or com.sts2ios.app when unsigned).
-  --xcode <path>      Xcode 26 app to build with (default: searched in /Applications and ~/Downloads).
+  --xcode <path>      Xcode (26 or newer) to build with. Default: the newest in /Applications, ~/Applications and
+                      ~/Downloads. Xcode 27.1+ makes the game fill an iPhone Duo's screens (see README).
   --icon game         Use the game's own pixel-art icon instead of rendering the Ironclad close-up.
   --clean             Delete build/work first (downloaded tools are kept).
   --no-ota            Don't download script updates (see tools/ota.sh) in the app.
@@ -44,7 +48,7 @@ die() { echo "error: $*" >&2; exit 1; }
 show() { local p="${1#$ROOT/}"; echo "$p"; }
 step() { echo "==> $*"; }
 
-GAME_DIR="${STS2_GAME_DIR:-}"; TEAM=""; UNSIGNED=0; INSTALL=0; DEVICE=""; BUNDLE_ID=""; XCODE_APP="${XCODE_APP:-}"
+GAME_DIR="${STS2_GAME_DIR:-}"; TEAM=""; UNSIGNED=0; INSTALL=0; DEVICE=""; BUNDLE_ID=""; XCODE_APP="${XCODE_APP:-}"; SIM=0
 ICON_MODE="ironclad"; CLEAN=0
 OTA=1; OTA_URL="https://github.com/FlyingViet/sts2-ios-launch/releases/download/ota/"
 while [[ $# -gt 0 ]]; do
@@ -54,6 +58,7 @@ while [[ $# -gt 0 ]]; do
 		--unsigned) UNSIGNED=1; shift ;;
 		--install) INSTALL=1; shift ;;
 		--device) DEVICE="$2"; shift 2 ;;
+		--simulator) SIM=1; shift ;;
 		--bundle-id) BUNDLE_ID="$2"; shift 2 ;;
 		--xcode) XCODE_APP="$2"; shift 2 ;;
 		--icon) ICON_MODE="$2"; shift 2 ;;
@@ -66,6 +71,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$ICON_MODE" == "ironclad" || "$ICON_MODE" == "game" ]] || die "--icon must be 'game' (or omitted)"
 [[ $UNSIGNED -eq 1 && $INSTALL -eq 1 ]] && die "--install needs a signed build; drop --unsigned"
+[[ $SIM -eq 1 && $UNSIGNED -eq 1 ]] && die "--simulator builds aren't signed anyway; drop --unsigned"
+[[ $SIM -eq 1 && "$(uname -m)" != "arm64" ]] && die "--simulator needs an Apple silicon Mac"
 
 # Runs a command with its output in build/logs/<name>.log. run_ok returns its status; run stops the build with
 # the end of the log if it fails.
@@ -98,23 +105,25 @@ command -v python3 >/dev/null && python3 -c 1 2>/dev/null || die "python3 is mis
 mkdir -p "$TOOLS" "$WORK" "$LOGS"
 
 # ---------------------------------------------------------------------------------------------------- Xcode
-# Godot 4.5's iOS app doesn't use UIScene, which apps built with the iOS 27 SDK (Xcode 27) must: they crash
-# at launch. Build with Xcode 26 (any 26.x); it can be installed next to a newer Xcode.
+# Xcode 26 or newer; the newest one found is used. Built with the iOS 27.1 SDK (Xcode 27.1+), the game fills both
+# screens of an iPhone Duo and follows it opening and closing; older SDKs give it a fixed iPhone-sized window there.
+# Godot 4.5 doesn't use UIScene, which the iOS 27 SDK requires: src/ios/scene_delegate.cpp adds it.
 xcode_major() { defaults read "$1/Contents/Info" CFBundleShortVersionString 2>/dev/null | cut -d. -f1; }
+xcode_ok() { local m; m="$(xcode_major "$1")"; [[ "$m" =~ ^[0-9]+$ && "$m" -ge 26 ]]; }
 if [[ -z "$XCODE_APP" ]]; then
 	best=""; bestv=""
 	for x in /Applications/Xcode*.app "$HOME/Applications"/Xcode*.app "$HOME/Downloads"/Xcode*.app \
 		"$(dirname "$(dirname "$(xcode-select -p 2>/dev/null || echo /x/x)")")"; do
-		[[ -d "$x" && "$(xcode_major "$x")" == "26" ]] || continue
+		[[ -d "$x" ]] && xcode_ok "$x" || continue
 		v="$(defaults read "$x/Contents/Info" CFBundleShortVersionString)"
 		if [[ -z "$best" ]] || [[ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" == "$v" ]]; then best="$x"; bestv="$v"; fi
 	done
-	[[ -n "$best" ]] || die "Xcode 26 not found. Download Xcode 26.x from https://developer.apple.com/download/all/
-       (free Apple ID), put it in /Applications (e.g. as Xcode-26.app), open it once, then run this again.
-       Xcode 27 can't be used yet (see README). Or point to it with --xcode /path/to/Xcode.app"
+	[[ -n "$best" ]] || die "Xcode 26 or newer not found. Install Xcode from the App Store (or
+       https://developer.apple.com/download/all/), open it once, then run this again.
+       Or point to it with --xcode /path/to/Xcode.app"
 	XCODE_APP="$best"
 fi
-[[ "$(xcode_major "$XCODE_APP")" == "26" ]] || die "$XCODE_APP is not Xcode 26"
+xcode_ok "$XCODE_APP" || die "$XCODE_APP is older than Xcode 26"
 export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
 xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1 || die "Xcode needs its first-launch setup: open $XCODE_APP once (or run
        sudo DEVELOPER_DIR=\"$DEVELOPER_DIR\" xcodebuild -runFirstLaunch), then run this again"
@@ -149,6 +158,7 @@ SHORT_VERSION="${GAME_VERSION#v}"
 
 # ---------------------------------------------------------------------------------------------------- signing
 if [[ $UNSIGNED -eq 0 && -z "$TEAM" ]]; then
+	# Simulator builds aren't signed; a team only keeps the Xcode project the same as for device builds.
 	TEAMS="$(defaults export com.apple.dt.Xcode - 2>/dev/null | python3 -c '
 import plistlib, sys
 try: d = plistlib.loads(sys.stdin.buffer.read())
@@ -160,15 +170,15 @@ for teams in d.get("IDEProvisioningTeamByIdentifier", {}).values():
 for k, v in seen.items(): print(k, v)
 ')"
 	case "$(printf '%s' "$TEAMS" | grep -c . || true)" in
-		0) die "no Apple account in Xcode. Either add your Apple ID in Xcode > Settings > Accounts (a free one works)
+		0) [[ $SIM -eq 1 ]] && UNSIGNED=1 || die "no Apple account in Xcode. Either add your Apple ID in Xcode > Settings > Accounts (a free one works)
        and run this again, or build with --unsigned and install the .ipa with Sideloadly/AltStore" ;;
 		1) TEAM="$(printf '%s' "$TEAMS" | cut -d' ' -f1)" ;;
-		*) printf 'Teams in Xcode:\n%s\n' "$TEAMS"; die "pick one with --team <id>" ;;
+		*) if [[ $SIM -eq 1 ]]; then UNSIGNED=1; else printf 'Teams in Xcode:\n%s\n' "$TEAMS"; die "pick one with --team <id>"; fi ;;
 	esac
 fi
 if [[ $UNSIGNED -eq 1 ]]; then
 	EXPORT_TEAM="AAAAAAAAAA"; BUNDLE_ID="${BUNDLE_ID:-com.sts2ios.app}"
-	echo "Signing: none (unsigned .ipa)"
+	if [[ $SIM -eq 1 ]]; then echo "Signing: none (Simulator)"; else echo "Signing: none (unsigned .ipa)"; fi
 else
 	EXPORT_TEAM="$TEAM"; BUNDLE_ID="${BUNDLE_ID:-com.sts2ios.$(echo "$TEAM" | tr '[:upper:]' '[:lower:]')}"
 	echo "Signing: team $TEAM"
@@ -249,7 +259,9 @@ if [[ ! -f "$TOOLS/spine/.ok-ios-${SPINE_SRC_COMMIT:0:12}-$SPINE_PATCH_ID" ]]; t
 	cp -R "$R/spine-cpp/spine-cpp" "$R/spine-godot/spine_godot/"
 	run scons-venv python3 -m venv "$S/venv"
 	run scons-install "$S/venv/bin/pip" install -q "scons==4.11.1"
-	(cd "$R/spine-godot" && run spine-scons "$S/venv/bin/scons" -j"$(sysctl -n hw.ncpu)" platform=ios target=template_release)
+	# godot-cpp defaults to /Applications/Xcode.app's compilers; use the selected Xcode's, to match its iOS SDK.
+	(cd "$R/spine-godot" && run spine-scons "$S/venv/bin/scons" -j"$(sysctl -n hw.ncpu)" platform=ios target=template_release \
+		IOS_TOOLCHAIN_PATH="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain")
 	cp "$R/spine-godot/bin/ios/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release" "$SPINE_IOS_LIB"
 	rm -rf "$S"
 	touch "$TOOLS/spine/.ok-ios-${SPINE_SRC_COMMIT:0:12}-$SPINE_PATCH_ID"
@@ -290,7 +302,7 @@ fi
 # Export an empty Godot C# project (named like the game's assembly) as an Xcode project: this provides the stock
 # Godot 4.5.1 iOS engine with FMOD and Spine. The game's code and data are swapped in afterwards.
 X="$WORK/xcode"
-FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION plist-bgaudio" "$TOOLS_ID")"
+FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION plist-bgaudio-scene" "$TOOLS_ID")"
 if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	step "Exporting the Godot iOS project"
 	P="$WORK/proj"; rm -rf "$P" && mkdir -p "$P/addons"
@@ -309,12 +321,21 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 		-c "Add :godot_cmdline:1 string --log-file" -c "Add :godot_cmdline:2 string user://godot.log" \
 		-c "Add :NSLocalNetworkUsageDescription string Slay the Spire 2 uses your local network to host and join multiplayer games." \
 		-c "Add :UIBackgroundModes array" -c "Add :UIBackgroundModes:0 string audio" \
+		-c "Add :UIApplicationSceneManifest dict" \
+		-c "Add :UIApplicationSceneManifest:UIApplicationSupportsMultipleScenes bool false" \
+		-c "Add :UIApplicationSceneManifest:UISceneConfigurations dict" \
+		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication array" \
+		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0 dict" \
+		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneConfigurationName string Default" \
+		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName string PortSceneDelegate" \
 		"$X/sts2/sts2-Info.plist"
 	# UIBackgroundModes audio: only used during multiplayer, to keep the game running in the background
 	# (src/native/Port/PortKeepAlive.cs); otherwise the app is suspended as usual.
 	# fmod-gdextension's iOS export plugin doesn't generate its plugin loader under Godot 4.5. Ours also swaps the
 	# extension's racy async file callbacks for blocking reads from the pck (see the file).
 	cat "$ROOT/src/ios/fmod_plugins_stub.cpp" >> "$X/sts2/dummy.cpp"
+	# UIScene for Godot's window: required by the iOS 27 SDK, and what lets the game resize on an iPhone Duo.
+	cat "$ROOT/src/ios/scene_delegate.cpp" >> "$X/sts2/dummy.cpp"
 	mark_done export "$FP"
 fi
 FRAMEWORK="$X/sts2/dylibs/ExportRelease/sts2_aot.xcframework/ios-arm64/sts2.framework"
@@ -374,6 +395,62 @@ if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 	mark_done pck "$FP"
 fi
 rm -f "$X/sts2.pck" && cp -c "$WORK/sts2.pck" "$X/sts2.pck" 2>/dev/null || cp "$WORK/sts2.pck" "$X/sts2.pck"
+
+# ---------------------------------------------------------------------------------------------------- Simulator
+# The same app for the iOS Simulator (Apple silicon). The engine, Spine and FMOD libraries and the NativeAOT game
+# code exist only as arm64 device builds here; arm64 Simulators run that code natively, so a copy of the Xcode
+# project gets them retagged as Simulator code (tools/arm64_to_sim.py, vtool), plus Metal stand-ins for the
+# Simulator's GPU (src/ios/simulator_metal.m).
+if [[ $SIM -eq 1 ]]; then
+	step "Building the app for the iOS Simulator"
+	SX="$WORK/sim-xcode"
+	rm -rf "$SX" && cp -cR "$X" "$SX" 2>/dev/null || { rm -rf "$SX"; cp -R "$X" "$SX"; }
+	to_sim() { # <device dylib> <output>; keeps its SDK version (the linker checks binaries built for newer SDKs harder)
+		local sdk; sdk="$(xcrun vtool -show-build "$1" | awk '$1 == "sdk" { print $2; exit }')"
+		xcrun vtool -set-build-version iossim 14.0 "${sdk:-17.0}" -replace -output "$2.tmp" "$1" \
+			&& mv -f "$2.tmp" "$2" && codesign -f -s - "$2" 2>/dev/null
+	}
+	F="$SX/sts2/dylibs/ExportRelease/sts2_aot.xcframework/ios-arm64_x86_64-simulator/sts2.framework/sts2"
+	[[ -f "$F" ]] || die "unexpected Godot export layout: $F missing"
+	to_sim "$WORK/native-out/sts2native.dylib" "$F"
+	install_name_tool -id @rpath/sts2.framework/sts2 "$F" 2>/dev/null && codesign -f -s - "$F" 2>/dev/null
+	S="$SX/sts2/dylibs/addons/spine/ios/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release"
+	to_sim "$S" "$S"
+	XF="$SX/sts2/dylibs/addons/fmod/libs/ios/libGodotFmod.ios.template_release.xcframework"
+	FW="libGodotFmod.ios.template_release.universal.framework"
+	cp -R "$XF/ios-arm64" "$XF/ios-arm64-simulator"
+	to_sim "$XF/ios-arm64/$FW/libGodotFmod.ios.template_release.universal" "$XF/ios-arm64-simulator/$FW/libGodotFmod.ios.template_release.universal"
+	L=":AvailableLibraries:$(plutil -extract AvailableLibraries raw "$XF/Info.plist")"
+	/usr/libexec/PlistBuddy -c "Add $L dict" -c "Add $L:BinaryPath string $FW" -c "Add $L:LibraryPath string $FW" \
+		-c "Add $L:LibraryIdentifier string ios-arm64-simulator" -c "Add $L:SupportedArchitectures array" \
+		-c "Add $L:SupportedArchitectures:0 string arm64" -c "Add $L:SupportedPlatform string ios" \
+		-c "Add $L:SupportedPlatformVariant string simulator" "$XF/Info.plist"
+	G="$SX/sts2.xcframework/ios-arm64_x86_64-simulator/libgodot.a" # Godot ships this one as x86_64 only
+	rm -f "$G" && cp "$SX/sts2.xcframework/ios-arm64/libgodot.a" "$G"
+	run sim-retag python3 "$ROOT/tools/arm64_to_sim.py" "$G"
+	run sim-metal xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=14.0 -fobjc-arc \
+		-c "$ROOT/src/ios/simulator_metal.m" -o "$WORK/simulator_metal.o"
+	run xcodebuild-sim xcodebuild -project "$SX/sts2.xcodeproj" -scheme sts2 -configuration Release -sdk iphonesimulator \
+		-destination "generic/platform=iOS Simulator" -derivedDataPath "$WORK/sim-derived" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+		CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
+		OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $WORK/simulator_metal.o -framework Metal" build
+	APP="$WORK/sim-derived/Build/Products/Release-iphonesimulator/sts2.app"
+	[[ -d "$APP" ]] || die "no Simulator app built (see $(show "$LOGS/xcodebuild-sim.log"))"
+	C="$APP/.sts2.pck.clone"
+	if cmp -s "$WORK/sts2.pck" "$APP/sts2.pck" && cp -c "$WORK/sts2.pck" "$C" 2>/dev/null; then
+		touch -r "$APP/sts2.pck" "$C" && mv -f "$C" "$APP/sts2.pck"
+	fi
+	rm -f "$C" && rm -rf "$SX"
+	echo
+	echo "Done: $(show "$APP")"
+	if [[ $INSTALL -eq 1 ]]; then
+		SIMDEV="${DEVICE:-booted}"
+		step "Installing on Simulator $SIMDEV"
+		run sim-install xcrun simctl install "$SIMDEV" "$APP"
+		echo "Installed. Start it from the Simulator's home screen, or: xcrun simctl launch $SIMDEV $BUNDLE_ID"
+	fi
+	exit 0
+fi
 
 # ---------------------------------------------------------------------------------------------------- app
 step "Building the app with Xcode"

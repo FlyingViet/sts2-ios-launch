@@ -53,10 +53,8 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
 ## What you need
 
 - **A Mac** (Apple silicon recommended) with about 15 GB free.
-- **Xcode 26.x.** Xcode 27 can't be used yet (see [Why Xcode 26](#why-xcode-26)). You can download Xcode 26 for
-  free at [developer.apple.com/download/all](https://developer.apple.com/download/all/) with any Apple ID, and
-  keep it next to a newer Xcode, for example as `/Applications/Xcode-26.app`. Open it once so it finishes
-  setting up.
+- **Xcode 26 or newer** (the newest one installed is used). Open it once so it finishes setting up. For an
+  **iPhone Duo**, use Xcode 27.1 or newer (see [iPhone Duo](#iphone-duo)).
 - **The game files** from your own Steam copy, on Steam's public branch (not a beta), from any of these:
   - **On the Mac:** install Slay the Spire 2 with Steam for Mac. The script looks for it automatically (not yet
     tested with a Mac install).
@@ -86,7 +84,7 @@ Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pr
      ```
 
    Open Terminal in that folder (`cd ~/Downloads/sts2-ios-launch-main`, or wherever it is).
-2. In Xcode 26, go to Settings → Accounts and add your Apple ID.
+2. In Xcode, go to Settings → Accounts and add your Apple ID.
 3. Connect your iPhone or iPad by cable, unlock it, and tap **Trust** if asked.
 4. Build and install:
 
@@ -134,17 +132,27 @@ an update needs that, the app tells you to rebuild instead. Details:
 | `--team <id>` | Apple team to sign with, if your Xcode has more than one. |
 | `--bundle-id <id>` | App ID. Default: `com.sts2ios.<team id>`. |
 | `--unsigned` | Make an unsigned `.ipa` instead (see above). |
-| `--xcode <path>` | Which Xcode 26 to use, if it isn't found automatically. |
+| `--xcode <path>` | Which Xcode (26 or newer) to use, instead of the newest one found. |
+| `--simulator` | Build for the iOS Simulator instead (Apple silicon Macs); with `--install`, installs on the booted Simulator or `--device <udid>`. For checking layouts, e.g. on the iPhone Duo Simulator; rendering there is approximate. |
 | `--icon game` | Use the game's own pixel-art icon instead of the Ironclad close-up. |
 | `--clean` | Rebuild everything (downloaded tools are kept). |
 | `--no-ota` | Don't download script updates in the app. |
 | `--ota-url <url>` | Where the app looks for script updates. |
 
-## Why Xcode 26
+## iPhone Duo
 
-The game runs on Godot 4.5, and Godot 4.5's iOS runtime doesn't use the UIScene app lifecycle that apps built
-with Apple's iOS 27 SDK (Xcode 27) are required to adopt. Built with Xcode 27, the app crashes at launch.
-Built with Xcode 26, the same app runs fine on iOS 27.
+Built with Xcode 27.1 or newer (the iOS 27.1 SDK), the game fills the iPhone Duo's outer screen when it's closed
+and its inner screen when it's open, and follows the phone as it opens, closes, folds or turns over, even mid-fight.
+The port keeps the game's buttons clear of the camera and status column on the outer screen, and keeps the hand of
+cards between the energy orb and End Turn on the squarer screens. Built with Xcode 26, iOS shows the game in a
+fixed iPhone-sized window on the Duo instead.
+
+Godot 4.5's iOS runtime doesn't use the UIScene app lifecycle, which apps built with the iOS 27 SDK must adopt
+(they're stopped at launch otherwise) and which the Duo needs to resize apps. The build adds it
+([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
+
+Tested in the iPhone Duo Simulator (`--simulator`) closed, half open and open, both ways round; not yet on a
+real iPhone Duo.
 
 ## Troubleshooting
 
@@ -154,7 +162,7 @@ Built with Xcode 26, the same app runs fine on iOS 27.
   `build/`, because .NET's iOS linker can't handle spaces in paths. The script prints where the result is.
 - **"patching sts2.dll failed":** your game version differs from the one this was made for. Switch Slay the
   Spire 2 to Steam's public branch (Properties → Betas → None), let it update, and copy the files again.
-- **Signing or provisioning errors:** check your Apple ID is in Xcode 26 → Settings → Accounts, and that your
+- **Signing or provisioning errors:** check your Apple ID is in Xcode → Settings → Accounts, and that your
   device is connected, unlocked and trusted. With a free Apple ID, Apple allows 3 sideloaded apps at a time
   and 10 new app IDs a week.
 - **No sound:** check the silent switch.
@@ -203,7 +211,8 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
    - the multiplayer join and host screens
    - your copy's `release_info.json` (the game version that multiplayer compares)
    - the script updater's settings and public key
-5. **App build:** builds and signs the app with Xcode.
+5. **App build:** builds and signs the app with Xcode, adding UIScene support to Godot's iOS app
+   ([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
 
 These tools are downloaded from their official sources during the build. None of them are included here:
 

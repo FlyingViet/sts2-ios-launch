@@ -215,10 +215,11 @@ func _place_tips() -> void:
 	var finger: Vector2 = vp.get_final_transform().affine_inverse() * _mouse
 	var vis := vp.get_visible_rect()
 	var display := get_node_or_null("/root/PortDisplay")
-	var inset: float = display.get("_inset") if display != null else 0.0
+	var inset_left: float = display.get("_inset_left") if display != null else 0.0
+	var inset_right: float = display.get("_inset_right") if display != null else 0.0
 	var bottom: float = display.get("_bottom_margin") if display != null else 16.0
-	var lo := Vector2(vis.position.x + inset + TIP_EDGE, vis.position.y + TIP_EDGE)
-	var hi := Vector2(vis.end.x - inset - TIP_EDGE, vis.end.y - bottom)
+	var lo := Vector2(vis.position.x + inset_left + TIP_EDGE, vis.position.y + TIP_EDGE)
+	var hi := Vector2(vis.end.x - inset_right - TIP_EDGE, vis.end.y - bottom)
 	var pos := Vector2(finger.x - TIP_GAP_LEFT - r.size.x, finger.y - TIP_GAP_ABOVE - r.size.y)
 	if pos.y < lo.y:
 		pos.y = finger.y + TIP_GAP_BELOW # no room above: below and to the left
