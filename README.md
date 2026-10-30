@@ -1,14 +1,105 @@
 # Slay the Spire 2 for iPhone and iPad (unofficial)
 
-Build a native iOS version of **Slay the Spire 2** from **your own copy** of the game, and install it on your
-own iPhone or iPad.
+Turn **your own copy** of Slay the Spire 2 from Steam into a native iPhone or iPad app. One command on a Mac
+patches your game files and installs the app on your phone.
 
-This repository contains **no game files**. The build script reads the game's data and code from a copy of the
-game you own on Steam, so you need to own Slay the Spire 2. This is a fan project, not affiliated with or
-endorsed by Mega Crit.
+This repository contains **no game files**, so you need to own Slay the Spire 2 on Steam. This is a fan
+project, not affiliated with or endorsed by Mega Crit.
 
 > **Don't share the app or `.ipa` you build.** It contains the game, so it's yours alone. Friends should build
 > their own from this repository.
+
+## Install
+
+You need:
+
+- **A Mac** (Apple silicon recommended) with about 15 GB free.
+- **Slay the Spire 2 on Steam**, on the public branch (not a beta). Tested with **v0.107.1**.
+- **An iPhone or iPad** on iOS 17 or later, and a cable to connect it to the Mac.
+- **An Apple ID.** A free one works (see [Keeping it working](#keeping-it-working)).
+
+### 1. Get your game files onto the Mac
+
+On a Windows PC with the game installed, open Steam, right-click **Slay the Spire 2** → **Manage** →
+**Browse local files**. Copy that whole folder to your Mac (a USB drive or a shared network folder works). It contains
+`SlayTheSpire2.pck` and a `data_sts2_windows_x86_64` folder.
+
+<details>
+<summary>No PC, or the game is installed with Steam for Mac</summary>
+
+- **Steam for Mac:** if the game is installed there, skip this step and leave out `--game` in step 4. (Not
+  yet tested with a Mac install.)
+- **No PC (not yet tested):** download the Windows version with Valve's
+  [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) and your Steam login, then use `~/sts2-game`
+  as your game folder:
+
+  ```sh
+  steamcmd +@sSteamCmdForcePlatformType windows +force_install_dir ~/sts2-game \
+    +login <your Steam username> +app_update 2868840 validate +quit
+  ```
+
+</details>
+
+### 2. Set up Xcode
+
+1. Install **Xcode 26 or newer** from the Mac App Store. For the **iPhone Duo**, use Xcode 27.1 or newer
+   (see [iPhone Duo](#iphone-duo)).
+2. Open Xcode once and let it finish installing its components.
+3. In Xcode, go to **Settings** → **Accounts**, click **+**, and sign in with your Apple ID.
+
+### 3. Connect your iPhone or iPad
+
+1. Connect it to the Mac with a cable and unlock it.
+2. Tap **Trust** if it asks whether to trust this computer.
+3. Turn on **Developer Mode**: Settings → Privacy & Security → Developer Mode, then let it restart. If you
+   don't see Developer Mode yet, it appears after step 4 first tries to install. Turn it on then, and run
+   step 4 again.
+
+### 4. Build and install
+
+Open **Terminal** and run:
+
+```sh
+git clone https://github.com/FlyingViet/sts2-ios-launch.git
+cd sts2-ios-launch
+./build.sh --install --game "/path/to/Slay the Spire 2"
+```
+
+Replace `/path/to/Slay the Spire 2` with the folder from step 1. The easiest way to get it right is to type
+`./build.sh --install --game ` (with a space at the end), drag the game folder from Finder into the Terminal
+window, and press Return.
+
+This one command does everything: it downloads the build tools, patches your copy of the game for iOS,
+compiles it, and installs the app on your phone. The first run downloads about 2 GB and takes roughly 5–15
+minutes. If something is wrong (no Apple ID in Xcode, wrong folder, phone not connected), it stops and tells you
+what to fix.
+
+No Git? Click **Code** → **Download ZIP** on this page, unzip it, and `cd` into that folder instead of running
+`git clone`.
+
+### 5. Open the app
+
+The first time, iOS may say the developer isn't trusted. Go to Settings → General → **VPN & Device
+Management**, tap your Apple ID, and tap **Trust**. Then open **Slay the Spire 2** and sign in to Steam to sync
+your saves (or skip that).
+
+### Keeping it working
+
+- **Free Apple ID:** the app stops opening after 7 days. Connect your phone and run the same `./build.sh`
+  command again. It takes about a minute, and your saves are kept (they're also in Steam Cloud). A paid
+  Apple Developer account lasts a year.
+- **Updating to a newer version of this port:** run `git pull` (or download the ZIP again), then the same
+  `./build.sh` command.
+- **Small fixes arrive on their own:** see [Script updates](#script-updates).
+- **Game updated on Steam?** Copy the new game files over and rebuild. If the patch step fails, this port
+  hasn't caught up with that game version yet.
+
+### Other ways to install
+
+- **Sideloadly or AltStore instead of Xcode signing:** `./build.sh --unsigned --game "/path/to/Slay the Spire 2"`
+  makes `build/SlayTheSpire2.ipa`. Install that with [Sideloadly](https://sideloadly.io) or
+  [AltStore](https://altstore.io), which sign it with your Apple ID.
+- **iOS Simulator:** see `--simulator` in [Options](#options).
 
 ## What you get
 
@@ -48,66 +139,13 @@ endorsed by Mega Crit.
   - **Supercharged:** 20 extra Energy every turn.
   - **Perfected Deck:** after every other modifier, your whole deck turns into Perfected Strike+.
 
-Tested with game version **v0.107.1** (Steam's public branch) on an iPhone 16 Pro Max running iOS 27.
+Tested on an iPhone 16 Pro Max running iOS 27.
 
-## What you need
+## Script updates
 
-- **A Mac** (Apple silicon recommended) with about 15 GB free.
-- **Xcode 26 or newer** (the newest one installed is used). Open it once so it finishes setting up. For an
-  **iPhone Duo**, use Xcode 27.1 or newer (see [iPhone Duo](#iphone-duo)).
-- **The game files** from your own Steam copy, on Steam's public branch (not a beta), from any of these:
-  - **On the Mac:** install Slay the Spire 2 with Steam for Mac. The script looks for it automatically (not yet
-    tested with a Mac install).
-  - **From a PC:** in Steam, right-click Slay the Spire 2 → Manage → Browse local files, then copy that whole
-    folder to the Mac. It contains `SlayTheSpire2.pck` and a `data_sts2_windows_x86_64` folder.
-  - **No PC (not yet tested):** download the Windows version with Valve's
-    [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) and your Steam login, then pass that folder
-    with `--game`:
-
-    ```sh
-    steamcmd +@sSteamCmdForcePlatformType windows +force_install_dir ~/sts2-game \
-      +login <your Steam username> +app_update 2868840 validate +quit
-    ```
-- **An Apple ID.** A free one works, but the app then stops opening after 7 days until you build and install it
-  again (that takes a minute). A paid Apple Developer account lasts a year.
-- **An iPhone or iPad** on iOS 17 or later, with Developer Mode on (Settings → Privacy & Security → Developer
-  Mode). Developer Mode appears there after the first install attempt.
-
-## Build and install
-
-1. Get this repository. Either:
-   - **Download the ZIP:** click Code → Download ZIP on this page, then unzip it.
-   - **Clone it:**
-
-     ```sh
-     git clone https://github.com/FlyingViet/sts2-ios-launch.git
-     ```
-
-   Open Terminal in that folder (`cd ~/Downloads/sts2-ios-launch-main`, or wherever it is).
-2. In Xcode, go to Settings → Accounts and add your Apple ID.
-3. Connect your iPhone or iPad by cable, unlock it, and tap **Trust** if asked.
-4. Build and install:
-
-   ```sh
-   ./build.sh --install                                  # game installed with Steam on this Mac
-   ./build.sh --game "/path/to/Slay the Spire 2" --install   # game folder copied from a PC
-   ```
-
-   The first build downloads about 2 GB of tools into `build/` and takes roughly 5–15 minutes, depending on
-   your connection and Mac. Later builds only redo what changed.
-5. The first time you open the app, iOS may say the developer isn't trusted. Go to Settings → General → VPN &
-   Device Management, tap your Apple ID, and trust it.
-6. Open the app and sign in to Steam to sync your saves, or skip that step.
-
-**To renew a free-account install** before or after it expires, run the same command again. Your saves are
-kept, and they're also in Steam Cloud.
-
-**To update** to the latest version of this repository, run `git pull` (or download the ZIP again), then the
-same build command.
-
-**Script updates over the air:** fixes to the port's scripts (touch input, layout, menus, the multiplayer and
-Steam Cloud screens) are also published as small signed downloads. The app checks once per launch on the main menu,
-downloads a newer one in the background, and uses it from the next launch. Compiled code (the game patches, Steam
+Fixes to the port's scripts (touch input, layout, menus, the multiplayer and Steam Cloud screens) arrive as small
+signed downloads, without rebuilding. The app checks once per launch on the main menu, downloads a newer one in the
+background, and uses it from the next launch. Compiled code (the game patches, Steam
 Cloud, multiplayer, frame pacing) can't change this way, because iOS only runs code that was signed at install; when
 an update needs that, the app tells you to rebuild instead. Details:
 
@@ -117,12 +155,7 @@ an update needs that, the app tells you to rebuild instead. Details:
 - To turn it off, build with `--no-ota`. A fork can point at its own release with `--ota-url` (and its own key, see
   [`tools/ota.sh`](tools/ota.sh)).
 
-### Without an Apple account in Xcode
-
-`./build.sh --game "/path/to/Slay the Spire 2" --unsigned` makes `build/SlayTheSpire2.ipa`. Install that with
-[Sideloadly](https://sideloadly.io) or [AltStore](https://altstore.io), which sign it with your Apple ID.
-
-### Options
+## Options
 
 | Option | What it does |
 | --- | --- |
