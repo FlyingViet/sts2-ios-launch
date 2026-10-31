@@ -346,6 +346,12 @@ FRAMEWORK="$X/sts2/dylibs/ExportRelease/sts2_aot.xcframework/ios-arm64/sts2.fram
 # compile them with the port's code to one native iOS library (NativeAOT).
 mkdir -p "$WORK/game-data"
 rsync -a --delete --include='*.dll' --exclude='*' "$GAME_DATA/" "$WORK/game-data/"
+# The macOS release bundles the .NET runtime alongside the game's assemblies.
+# Use the SDK's reference assemblies instead of referencing runtime DLLs twice.
+for ref in "$DOTNET_ROOT"/packs/Microsoft.NETCore.App.Ref/*/ref/net9.0/*.dll "$DOTNET_ROOT"/shared/Microsoft.NETCore.App/*/*.dll; do
+	[[ -f "$ref" ]] && rm -f "$WORK/game-data/$(basename "$ref")"
+done
+rm -f "$WORK/game-data/System.Private.CoreLib.dll"
 FP="$(fingerprint "$ROOT/src/patcher" "$ROOT/src/native" "$WORK/game-data" "$IOS_SDK" "$TOOLS_ID")"
 if ! up_to_date native "$FP" || [[ ! -f "$WORK/native-out/sts2native.dylib" ]]; then
 	step "Restoring stock GodotSharp $GODOT_VERSION"
