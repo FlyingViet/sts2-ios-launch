@@ -475,6 +475,13 @@ else
 fi
 APP="$WORK/derived/Build/Products/Release-iphoneos/sts2.app"
 [[ -d "$APP" ]] || die "no app built (see $(show "$LOGS/xcodebuild.log"))"
+# Xcode makes a full 2 GB copy of the pck in the app. Swap in an APFS clone of the identical file to save that
+# space (same bytes, so the app's signature still holds). Silently skipped on disks without clones.
+C="$APP/.sts2.pck.clone"
+if cmp -s "$WORK/sts2.pck" "$APP/sts2.pck" && cp -c "$WORK/sts2.pck" "$C" 2>/dev/null; then
+	touch -r "$APP/sts2.pck" "$C" && mv -f "$C" "$APP/sts2.pck"
+fi
+rm -f "$C"
 
 if [[ $UNSIGNED -eq 1 ]]; then
 	step "Packaging the .ipa"
