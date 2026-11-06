@@ -26,6 +26,7 @@ static unsafe class PortPerf
 	static TimeSpan _pause, _wPause;
 	static double _pipe, _wPipe, _metal, _wMetal;
 	static delegate* unmanaged<double> _metalMs;
+	static string _orientation = "no requests";
 
 	static double MetalMs() => _metalMs != null ? _metalMs() : 0;
 
@@ -146,6 +147,9 @@ static unsafe class PortPerf
 				$"paced={PortGcPacer.Paced} ({PortGcPacer.PausedMs:F0}ms, max {PortGcPacer.MaxPauseMs:F0}, full {PortGcPacer.Full}) overflows={PortGcPacer.Overflows} " +
 				$"thermal={ObjC.ThermalState()}{(ObjC.LowPowerMode() ? " lowPower" : "")}");
 			GD.Print("[PERF] metal ", NativeStatus("port_metal_status"));
+			string orientation = NativeStatus("port_orientation_status");
+			if (orientation != _orientation)
+				GD.Print("[PORT] orientation: ", _orientation = orientation);
 			_frames.Clear(); _logic.Clear(); _render.Clear();
 			PortFrameRate.IdleFrames = PortFrameRate.FullFrames = 0;
 			PortFrameRate.TouchBusy = PortFrameRate.TweenBusy = PortFrameRate.MaxTweens = 0;

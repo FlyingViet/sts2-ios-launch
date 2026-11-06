@@ -209,8 +209,12 @@ Godot 4.5's iOS runtime doesn't use the UIScene app lifecycle, which apps built 
 (they're stopped at launch otherwise) and which the Duo needs to resize apps. The build adds it
 ([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
 
-Tested in the iPhone Duo Simulator (`--simulator`) closed, half open and open, both ways round; not yet on a
-real iPhone Duo.
+The game stays landscape in every pose. A real iPhone Duo can still resize it to the upright outer screen while
+it's in the background (folded and held upright in another app); the game then asks iOS to turn it back to landscape
+([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
+
+Tested in the iPhone Duo Simulator (`--simulator`) closed, half open and open, both ways round, and played on a real
+iPhone Duo (iOS 27.2).
 
 ## Troubleshooting
 
