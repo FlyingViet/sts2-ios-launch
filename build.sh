@@ -509,7 +509,8 @@ try: devices = json.load(open(sys.argv[1]))["result"]["devices"]
 except Exception: devices = []
 for d in devices:
     hw, cp = d.get("hardwareProperties", {}), d.get("connectionProperties", {})
-    if hw.get("reality") == "physical" and hw.get("platform") == "iOS" and cp.get("pairingState") == "paired":
+    if hw.get("reality") == "physical" and hw.get("platform") == "iOS" and cp.get("pairingState") == "paired" \
+            and cp.get("tunnelState") != "unavailable":
         print(hw.get("udid") or d["identifier"]); break
 ' "$WORK/devices.json")"
 		[[ -n "$DEVICE" ]] || die "no paired iPhone/iPad found: connect it by cable, unlock it and tap Trust"
