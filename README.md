@@ -155,6 +155,30 @@ an update needs that, the app tells you to rebuild instead. Details:
 - To turn it off, build with `--no-ota`. A fork can point at its own release with `--ota-url` (and its own key, see
   [`tools/ota.sh`](tools/ota.sh)).
 
+## Smoother first launches
+
+The first time each effect appears after installing (or after an iOS update), Godot 4.5 compiles its Metal shader
+and pipeline while the game waits: about 0.3 s per new effect on an iPhone 16 Pro Max, and up to a second for new
+particle effects. Builds can skip most of that with shaders harvested from a device you've played on:
+
+1. Build and install as usual, then play for a while (a few fights, a shop, an event). The app keeps the shaders it
+   compiled and records each Metal pipeline it creates.
+2. With the device connected, run `tools/harvest_shaders.sh --bundle-id <the bundle ID the build printed>`. It
+   copies them into `build/shader-cache`. Run it again after more play to add to it.
+3. Build again. Every later build includes them:
+   - **Precompiled shaders** ([`tools/bake_shaders.py`](tools/bake_shaders.py)): the harvested shaders compiled
+     with Xcode's Metal compiler, so the game loads them instead of compiling them.
+   - **Pipeline warm-up** ([`src/ios/metal_pipelines.m`](src/ios/metal_pipelines.m)): right after launch, two
+     background threads build the recorded pipelines in the order the game first needed them, so they're ready
+     before the game asks. Once that's done for a build and iOS version, later launches skip it.
+
+These need Python 3.14 or newer and Xcode's Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`).
+The precompiled shaders and the warm-up work on every iPhone and iPad with an A13 or M1 chip or newer, whichever of
+them you harvested from, as long as it runs the same or a newer major iOS version than the harvesting device (Godot
+generates the same shaders for all of them). Older devices compile their own shaders as before. The
+harvest holds compiled copies of the game's shaders, so keep it out of anything you share. `godot.log` reports the
+time the game waited for compiles (`[PERF] metal`).
+
 ## Options
 
 | Option | What it does |
@@ -171,6 +195,7 @@ an update needs that, the app tells you to rebuild instead. Details:
 | `--clean` | Rebuild everything (downloaded tools are kept). |
 | `--no-ota` | Don't download script updates in the app. |
 | `--ota-url <url>` | Where the app looks for script updates. |
+| `--shaders <folder>` | Shaders and pipelines harvested from a device, to precompile and warm up (see [Smoother first launches](#smoother-first-launches)). Default: `build/shader-cache` if it exists. |
 
 ## iPhone Duo
 
@@ -244,8 +269,11 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
    - the multiplayer join and host screens
    - your copy's `release_info.json` (the game version that multiplayer compares)
    - the script updater's settings and public key
+   - precompiled shaders and the pipeline warm-up list, if you've harvested them
+     ([Smoother first launches](#smoother-first-launches))
 5. **App build:** builds and signs the app with Xcode, adding UIScene support to Godot's iOS app
-   ([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
+   ([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)) and the Metal hooks that record, time and warm up
+   pipelines ([`src/ios/metal_pipelines.m`](src/ios/metal_pipelines.m)).
 
 These tools are downloaded from their official sources during the build. None of them are included here:
 

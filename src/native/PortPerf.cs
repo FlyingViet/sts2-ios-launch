@@ -10,6 +10,9 @@ using Godot;
 // iOS port frame-time monitor: logs hitches (> HitchMs) with GC/pipeline context and a summary every 15 s.
 // Per frame it also times game logic (process_frame -> frame_pre_draw) and rendering (frame_pre_draw ->
 // frame_post_draw, which includes waiting for a free drawable when the GPU is behind; Metal has no GPU timers here).
+// "other" is the rest of the frame: input handling (taps run game code there), physics, and waiting for vsync.
+// "metal" is the time the game waited for Metal shader and pipeline compiles (src/ios/metal_pipelines.m), which also
+// reports the background pipeline warm-up in each summary.
 // Benchmark: push a file named port_bench to the app's Documents (devicectl device copy to) and launch; on the main
 // menu it cycles frame pacing / FPS limit / MSAA settings and logs a [BENCH] line per setting, then removes the file.
 static unsafe class PortPerf
@@ -21,7 +24,10 @@ static unsafe class PortPerf
 	static readonly List<double> _frames = new(4096), _logic = new(4096), _render = new(4096);
 	static int _g0, _g1, _g2, _wg0, _wg1, _wg2, _hitchLogs;
 	static TimeSpan _pause, _wPause;
-	static double _pipe, _wPipe;
+	static double _pipe, _wPipe, _metal, _wMetal;
+	static delegate* unmanaged<double> _metalMs;
+
+	static double MetalMs() => _metalMs != null ? _metalMs() : 0;
 
 	// Starting a Thread here deadlocks (runtime init is still in progress), so defer via GCD on the main
 	// queue, which is also Godot's main thread on iOS.
@@ -65,6 +71,10 @@ static unsafe class PortPerf
 			" serverGC=", GCSettings.IsServerGC, " latency=", GCSettings.LatencyMode,
 			" concurrent=", AppContext.TryGetSwitch("System.GC.Concurrent", out bool c) ? c.ToString() : "default");
 		GD.Print("[PORT] FMOD file system: ", FmodFileSystemStatus());
+		GD.Print("[PORT] shaders: ", NativeStatus("port_shader_cache_status"));
+		if (NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "port_metal_compile_ms", out IntPtr metalMs))
+			_metalMs = (delegate* unmanaged<double>)metalMs;
+		GD.Print("[PORT] metal: ", NativeStatus("port_metal_status"));
 		var rd = RenderingServer.GetRenderingDevice();
 		string Fmt(RenderingDevice.DataFormat f) => rd != null && rd.TextureIsFormatSupportedForUsage(f, RenderingDevice.TextureUsageBits.SamplingBit) ? "yes" : "no";
 		GD.Print("[PERF] gpu=", rd?.GetDeviceName(), " bc1=", Fmt(RenderingDevice.DataFormat.Bc1RgbaUnormBlock),
@@ -87,15 +97,18 @@ static unsafe class PortPerf
 			GD.Print($"[BENCH] {_bench.Count} settings x {BenchSec}s, starting in {BenchDelaySec}s (leave the app on the main menu)");
 		}
 		_g0 = GC.CollectionCount(0); _g1 = GC.CollectionCount(1); _g2 = GC.CollectionCount(2);
-		_pause = GC.GetTotalPauseDuration(); _pipe = Pipelines();
+		_pause = GC.GetTotalPauseDuration(); _pipe = Pipelines(); _metal = MetalMs();
 		_lastMs = _windowStartMs = Clock.Elapsed.TotalMilliseconds;
 		tree.ProcessFrame += OnFrame;
 	}
 
 	// Set by load_all_fmod_plugins in src/ios/fmod_plugins_stub.cpp (compiled into the app executable).
-	static string FmodFileSystemStatus()
+	static string FmodFileSystemStatus() => NativeStatus("port_fmod_file_system_status");
+
+	// Status strings exported by src/ios/*.cpp (compiled into the app executable).
+	static string NativeStatus(string export)
 	{
-		if (!NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "port_fmod_file_system_status", out IntPtr fn))
+		if (!NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), export, out IntPtr fn))
 			return "unknown (status export missing)";
 		return Marshal.PtrToStringUTF8(((delegate* unmanaged<IntPtr>)fn)()) ?? "unknown";
 	}
@@ -113,32 +126,33 @@ static unsafe class PortPerf
 			BenchStep(now, dt);
 		int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
 		TimeSpan pause = GC.GetTotalPauseDuration();
-		double pipe = Pipelines();
+		double pipe = Pipelines(), metal = MetalMs();
 		if (dt > HitchMs && _hitchLogs++ < 300)
 		{
 			GD.Print($"[PERF] hitch t={now / 1000:F1}s dt={dt:F0}ms gc={g0 - _g0}/{g1 - _g1}/{g2 - _g2} gcPause={(pause - _pause).TotalMilliseconds:F1}ms " +
-				$"pipelines+={pipe - _pipe:F0} logic={_logicMs:F1}ms render={_renderMs:F1}ms " +
+				$"pipelines+={pipe - _pipe:F0} metal+={metal - _metal:F0}ms logic={_logicMs:F1}ms render={_renderMs:F1}ms other={dt - _logicMs - _renderMs:F0}ms " +
 				$"draws={Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame):F0} objs={Performance.GetMonitor(Performance.Monitor.ObjectCount):F0}");
 		}
-		_wg0 += g0 - _g0; _wg1 += g1 - _g1; _wg2 += g2 - _g2; _wPause += pause - _pause; _wPipe += pipe - _pipe;
-		_g0 = g0; _g1 = g1; _g2 = g2; _pause = pause; _pipe = pipe;
+		_wg0 += g0 - _g0; _wg1 += g1 - _g1; _wg2 += g2 - _g2; _wPause += pause - _pause; _wPipe += pipe - _pipe; _wMetal += metal - _metal;
+		_g0 = g0; _g1 = g1; _g2 = g2; _pause = pause; _pipe = pipe; _metal = metal;
 		if (now - _windowStartMs >= SummarySec * 1000)
 		{
 			int n = _frames.Count;
 			GD.Print($"[PERF] summary t={now / 1000:F0}s fps={n / ((now - _windowStartMs) / 1000):F0} {Stats(_frames, _logic, _render)} " +
-				$"gc={_wg0}/{_wg1}/{_wg2} gcPause={_wPause.TotalMilliseconds:F0}ms pipelines={_wPipe:F0} heap={GC.GetTotalMemory(false) / 1048576}MB " +
+				$"gc={_wg0}/{_wg1}/{_wg2} gcPause={_wPause.TotalMilliseconds:F0}ms pipelines={_wPipe:F0} metal={_wMetal:F0}ms heap={GC.GetTotalMemory(false) / 1048576}MB " +
 				$"vram={RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.VideoMemUsed) / 1048576}MB display={PortFrameRate.DisplayRate}Hz " +
 				$"idle={100 * PortFrameRate.IdleFrames / Math.Max(1, PortFrameRate.IdleFrames + PortFrameRate.FullFrames)}% " +
 				$"busy(touch/tween)={PortFrameRate.TouchBusy}/{PortFrameRate.TweenBusy} tweens<={PortFrameRate.MaxTweens} oldest={PortFrameRate.OldestTween:F0}s " +
 				$"paced={PortGcPacer.Paced} ({PortGcPacer.PausedMs:F0}ms, max {PortGcPacer.MaxPauseMs:F0}, full {PortGcPacer.Full}) overflows={PortGcPacer.Overflows} " +
 				$"thermal={ObjC.ThermalState()}{(ObjC.LowPowerMode() ? " lowPower" : "")}");
+			GD.Print("[PERF] metal ", NativeStatus("port_metal_status"));
 			_frames.Clear(); _logic.Clear(); _render.Clear();
 			PortFrameRate.IdleFrames = PortFrameRate.FullFrames = 0;
 			PortFrameRate.TouchBusy = PortFrameRate.TweenBusy = PortFrameRate.MaxTweens = 0;
 			PortFrameRate.OldestTween = 0;
 			PortGcPacer.Paced = PortGcPacer.Full = PortGcPacer.Overflows = 0;
 			PortGcPacer.PausedMs = PortGcPacer.MaxPauseMs = 0;
-			_windowStartMs = now; _wg0 = _wg1 = _wg2 = 0; _wPause = TimeSpan.Zero; _wPipe = 0;
+			_windowStartMs = now; _wg0 = _wg1 = _wg2 = 0; _wPause = TimeSpan.Zero; _wPipe = _wMetal = 0;
 		}
 	}
 

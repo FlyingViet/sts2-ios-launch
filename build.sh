@@ -37,6 +37,9 @@ Usage: ./build.sh --game <folder> [options]
   --clean             Delete build/work first (downloaded tools are kept).
   --no-ota            Don't download script updates (see tools/ota.sh) in the app.
   --ota-url <url>     Where the app looks for script updates (a fork's own "ota" release).
+  --shaders <folder>  Shader cache and pipelines harvested from a device (tools/harvest_shaders.sh) to precompile
+                      into the app and warm up in the background at launch, so new effects don't freeze the game
+                      while iOS compiles them. Default: build/shader-cache if it exists.
 
 Everything goes in build/ (or ~/Library/Caches/sts2-ios-launch if this folder's path contains a space).
 EOF
@@ -50,7 +53,7 @@ step() { echo "==> $*"; }
 
 GAME_DIR="${STS2_GAME_DIR:-}"; TEAM=""; UNSIGNED=0; INSTALL=0; DEVICE=""; BUNDLE_ID=""; XCODE_APP="${XCODE_APP:-}"; SIM=0
 ICON_MODE="ironclad"; CLEAN=0
-OTA=1; OTA_URL="https://github.com/FlyingViet/sts2-ios-launch/releases/download/ota/"
+OTA=1; OTA_URL="https://github.com/FlyingViet/sts2-ios-launch/releases/download/ota/"; SHADERS=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--game) GAME_DIR="$2"; shift 2 ;;
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
 		--clean) CLEAN=1; shift ;;
 		--no-ota) OTA=0; shift ;;
 		--ota-url) OTA_URL="$2"; shift 2 ;;
+		--shaders) SHADERS="$2"; shift 2 ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage; die "unknown option $1" ;;
 	esac
@@ -73,6 +77,12 @@ done
 [[ $UNSIGNED -eq 1 && $INSTALL -eq 1 ]] && die "--install needs a signed build; drop --unsigned"
 [[ $SIM -eq 1 && $UNSIGNED -eq 1 ]] && die "--simulator builds aren't signed anyway; drop --unsigned"
 [[ $SIM -eq 1 && "$(uname -m)" != "arm64" ]] && die "--simulator needs an Apple silicon Mac"
+if [[ -n "$SHADERS" ]]; then
+	[[ -d "$SHADERS" ]] || die "no such folder: $SHADERS"
+	SHADERS="$(cd "$SHADERS" && pwd)"
+elif [[ -d "$BUILD/shader-cache" ]]; then
+	SHADERS="$BUILD/shader-cache"
+fi
 
 # Runs a command with its output in build/logs/<name>.log. run_ok returns its status; run stops the build with
 # the end of the log if it fails.
@@ -334,6 +344,8 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	# fmod-gdextension's iOS export plugin doesn't generate its plugin loader under Godot 4.5. Ours also swaps the
 	# extension's racy async file callbacks for blocking reads from the pck (see the file).
 	cat "$ROOT/src/ios/fmod_plugins_stub.cpp" >> "$X/sts2/dummy.cpp"
+	# Lets the precompiled shaders below take effect (see the file). Uses the stub's pck reader, so it comes after.
+	cat "$ROOT/src/ios/shader_cache_prep.cpp" >> "$X/sts2/dummy.cpp"
 	# UIScene for Godot's window: required by the iOS 27 SDK, and what lets the game resize on an iPhone Duo.
 	cat "$ROOT/src/ios/scene_delegate.cpp" >> "$X/sts2/dummy.cpp"
 	mark_done export "$FP"
@@ -368,6 +380,24 @@ fi
 cp "$WORK/native-out/sts2native.dylib" "$FRAMEWORK/sts2"
 install_name_tool -id @rpath/sts2.framework/sts2 "$FRAMEWORK/sts2" 2>/dev/null
 
+# ---------------------------------------------------------------------------------------------------- shaders
+# Precompile the Metal shaders in a harvested shader cache (tools/bake_shaders.py) for the game data below, and
+# list the recorded pipelines for the app's warm-up (src/ios/metal_pipelines.m).
+BAKE="$WORK/shader-bake"; PIPES="$WORK/shader-pipelines"
+if [[ -n "$SHADERS" ]]; then
+	FP="$(fingerprint "$SHADERS" "$ROOT/tools/bake_shaders.py" "$IOS_SDK $(xcrun -sdk iphoneos metal --version 2>&1 | head -1)")"
+	if ! up_to_date shaders "$FP" || [[ ! -d "$BAKE" ]]; then
+		step "Precompiling shaders from $(show "$SHADERS")"
+		xcrun -sdk iphoneos metal --version > /dev/null 2>&1 || die "Xcode's Metal compiler is missing: run
+       xcodebuild -downloadComponent MetalToolchain (or drop --shaders / delete build/shader-cache)"
+		run shader-bake python3 "$ROOT/tools/bake_shaders.py" --out "$BAKE" --objs "$WORK/shader-objs" --pipelines-out "$PIPES" "$SHADERS"
+		grep -E "^(baked|warm-up list|no recorded)" "$LOGS/shader-bake.log" | sed 's/^/    /'
+		mark_done shaders "$FP"
+	fi
+else
+	rm -rf "$BAKE" "$PIPES" "$WORK/shaders.stamp"
+fi
+
 # ---------------------------------------------------------------------------------------------------- game data
 # Add the port's scripts and settings (src/pck) to a copy of the game's pck, at the same res:// paths.
 # The game's release_info.json (its version, which multiplayer joins compare) normally sits next to the
@@ -375,7 +405,8 @@ install_name_tool -id @rpath/sts2.framework/sts2 "$FRAMEWORK/sts2" 2>/dev/null
 # Script updates (src/pck/port/ota.gd, tools/ota.sh): the app trusts packs signed with src/ota/public.pem that were
 # made for exactly this compiled code (OTA_COMPAT). built_at is when the scripts were added: older packs are ignored.
 OTA_COMPAT="$(bash "$ROOT/tools/ota.sh" id)"
-FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "${INFO:-no-release-info}" "$ROOT/src/ota" "ota $OTA $OTA_URL $OTA_COMPAT" "$TOOLS_ID")"
+FP="$(fingerprint "$ROOT/src/pck" "$PCK_ID" "${INFO:-no-release-info}" "$ROOT/src/ota" "ota $OTA $OTA_URL $OTA_COMPAT" "$TOOLS_ID" \
+	"$( [[ -d "$BAKE" ]] && fingerprint "$BAKE" || echo no-bake)" "$( [[ -d "$PIPES" ]] && fingerprint "$PIPES" || echo no-pipelines)")"
 if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 	step "Adding the port's files to the game data (about 2 GB)"
 	PF=()
@@ -389,12 +420,32 @@ if ! up_to_date pck "$FP" || [[ ! -f "$WORK/sts2.pck" ]]; then
 		echo "built_at=$(date -u +%s)"
 	} > "$WORK/ota.cfg"
 	PF+=("--patch-file=$WORK/ota.cfg=res://port/ota.cfg" "--patch-file=$ROOT/src/ota/public.pem=res://port/ota_public.pem")
+	# Godot reads baked shaders from res://.godot/shader_cache (after its own cache in Documents).
+	if [[ -d "$BAKE" ]]; then
+		while IFS= read -r f; do PF+=("--patch-file=$f=res://.godot/shader_cache/${f#$BAKE/}"); done < <(find "$BAKE" -type f -name '*.cache')
+	fi
+	if [[ -d "$PIPES" ]]; then
+		for f in "$PIPES"/*; do PF+=("--patch-file=$f=res://port/pipelines/$(basename "$f")"); done
+	fi
 	rm -f "$WORK/sts2.pck"
 	run pck-patch "$GDRE" --headless --pck-patch="$PCK" --output="$WORK/sts2.pck" "${PF[@]}"
 	[[ -f "$WORK/sts2.pck" ]] || die "pck patch produced no file (see $(show "$LOGS/pck-patch.log"))"
 	mark_done pck "$FP"
 fi
 rm -f "$X/sts2.pck" && cp -c "$WORK/sts2.pck" "$X/sts2.pck" 2>/dev/null || cp "$WORK/sts2.pck" "$X/sts2.pck"
+
+# ---------------------------------------------------------------------------------------------------- Metal hooks
+# Records the pipelines the game creates, warms up the listed ones at launch, and times compiles
+# (src/ios/metal_pipelines.m). Objective-C, so it's built here and linked in rather than appended to dummy.cpp.
+# Named by content, so Xcode relinks when it changes.
+metal_hooks() { # <sdk> <min-version flag> -> prints the object's path
+	local o="$WORK/metal_pipelines-$1-$(fingerprint "$ROOT/src/ios/metal_pipelines.m" | cut -c1-12).o"
+	if [[ ! -f "$o" ]]; then
+		rm -f "$WORK"/metal_pipelines-"$1"-*.o
+		run "metal-hooks-$1" xcrun -sdk "$1" clang -arch arm64 "$2" -fobjc-arc -O2 -c "$ROOT/src/ios/metal_pipelines.m" -o "$o"
+	fi
+	echo "$o"
+}
 
 # ---------------------------------------------------------------------------------------------------- Simulator
 # The same app for the iOS Simulator (Apple silicon). The engine, Spine and FMOD libraries and the NativeAOT game
@@ -430,10 +481,11 @@ if [[ $SIM -eq 1 ]]; then
 	run sim-retag python3 "$ROOT/tools/arm64_to_sim.py" "$G"
 	run sim-metal xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=14.0 -fobjc-arc \
 		-c "$ROOT/src/ios/simulator_metal.m" -o "$WORK/simulator_metal.o"
+	HOOKS="$(metal_hooks iphonesimulator -mios-simulator-version-min=14.0)"
 	run xcodebuild-sim xcodebuild -project "$SX/sts2.xcodeproj" -scheme sts2 -configuration Release -sdk iphonesimulator \
 		-destination "generic/platform=iOS Simulator" -derivedDataPath "$WORK/sim-derived" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
 		CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
-		OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $WORK/simulator_metal.o -framework Metal" build
+		OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $WORK/simulator_metal.o $HOOKS -framework Metal" build
 	APP="$WORK/sim-derived/Build/Products/Release-iphonesimulator/sts2.app"
 	[[ -d "$APP" ]] || die "no Simulator app built (see $(show "$LOGS/xcodebuild-sim.log"))"
 	C="$APP/.sts2.pck.clone"
@@ -454,8 +506,9 @@ fi
 
 # ---------------------------------------------------------------------------------------------------- app
 step "Building the app with Xcode"
+HOOKS="$(metal_hooks iphoneos -miphoneos-version-min=17.0)"
 XB=(xcodebuild -project "$X/sts2.xcodeproj" -scheme sts2 -configuration Release -destination generic/platform=iOS
-	-derivedDataPath "$WORK/derived")
+	-derivedDataPath "$WORK/derived" OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $HOOKS -framework Metal")
 if [[ $UNSIGNED -eq 1 ]]; then
 	run xcodebuild "${XB[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
 else
