@@ -2,7 +2,8 @@
 # Builds Slay the Spire 2 for iPhone/iPad from your own copy of the game. See README.md.
 set -euo pipefail
 
-TESTED_GAME_VERSION="v0.107.1"
+TESTED_GAME_VERSION="v0.107.1" # Steam's public branch
+TESTED_BETA_VERSION="v0.113.0" # Steam's public-beta branch
 GODOT_VERSION="4.5.1"
 DOTNET_VERSION="9.0.318"
 GDRE_VERSION="2.7.0"
@@ -160,9 +161,9 @@ if [[ -n "$INFO" ]]; then GAME_VERSION="$(python3 -c 'import json,sys; print(jso
 echo "Game: $GAME_VERSION"
 echo "      $PCK"
 echo "      $GAME_DATA"
-if [[ "$GAME_VERSION" != "$TESTED_GAME_VERSION" ]]; then
-	echo "warning: this was tested with $TESTED_GAME_VERSION (Steam's public branch). Other versions may fail to"
-	echo "         patch, and multiplayer needs every player on the same version."
+if [[ "$GAME_VERSION" != "$TESTED_GAME_VERSION" && "$GAME_VERSION" != "$TESTED_BETA_VERSION" ]]; then
+	echo "warning: this was tested with $TESTED_GAME_VERSION (Steam's public branch) and $TESTED_BETA_VERSION (its beta)."
+	echo "         Other versions may fail to patch, and multiplayer needs every player on the same version."
 fi
 SHORT_VERSION="${GAME_VERSION#v}"
 
@@ -374,12 +375,13 @@ if ! up_to_date native "$FP" || [[ ! -f "$WORK/native-out/sts2native.dylib" ]]; 
 	rm -rf "$WORK/patcher" "$WORK/patched" && mkdir -p "$WORK/patched" && cp -R "$ROOT/src/patcher" "$WORK/patcher"
 	(cd "$WORK/patcher" && run patch-godotsharp dotnet run -c Release -- "$GODOTSHARP" "$WORK/patched/GodotSharp.dll")
 	if ! (cd "$WORK/patcher" && run patch-sts2 dotnet run -c Release --no-build -- "$WORK/game-data/sts2.dll" "$WORK/patched/sts2.dll"); then
-		die "patching sts2.dll failed (game version $GAME_VERSION; tested with $TESTED_GAME_VERSION)"
+		die "patching sts2.dll failed (game version $GAME_VERSION; tested with $TESTED_GAME_VERSION and $TESTED_BETA_VERSION)"
 	fi
 	step "Compiling the game for iOS (NativeAOT, takes a few minutes)"
 	rm -rf "$WORK/native" "$WORK/native-out" && cp -R "$ROOT/src/native" "$WORK/native"
 	(cd "$WORK/native" && run native-publish dotnet publish -c Release -o "$WORK/native-out" \
-		-p:GameDataDir="$WORK/game-data" -p:PatchedDir="$WORK/patched" -p:IosSdkPath="$IOS_SDK")
+		-p:GameDataDir="$WORK/game-data" -p:PatchedDir="$WORK/patched" -p:IosSdkPath="$IOS_SDK" \
+		-p:GameApi="$(cat "$WORK/patched/game-api.txt")")
 	[[ -f "$WORK/native-out/sts2native.dylib" ]] || die "NativeAOT produced no library (see $(show "$LOGS/native-publish.log"))"
 	mark_done native "$FP"
 fi

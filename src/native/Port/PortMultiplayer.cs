@@ -21,6 +21,9 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Unlocks;
 using MegaCrit.Sts2.Port;
+#if STS2_V0113
+using LobbyPlayer = MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer;
+#endif
 
 namespace PortMultiplayer;
 
@@ -130,7 +133,14 @@ static class PortMp
 		PortHooks.NullPlayerId = id;
 		Log($"joining {ip}:{Port} as player {id} (this device: {wifi ?? "no Wi-Fi"}{(tailscale != null ? ", Tailscale " + tailscale : "")})");
 		await PortNames.StartClient(ip, id);
-		await screen.JoinGameAsync(new TrackedConnection(new ENetClientConnectionInitializer(id, ip, Port)));
+		var previous = PortHooks.ClientService;
+		var join = screen.JoinGameAsync(new ENetClientConnectionInitializer(id, ip, Port));
+		// The join makes its client service before it first waits; keep the app running while that's connected.
+		var tracked = PortHooks.ClientService;
+		if (tracked != null && tracked != previous) PortKeepAlive.Track(() => tracked.IsConnected);
+		await join;
+		var joined = PortHooks.ClientService;
+		if (joined != null && joined != previous && joined != tracked) PortKeepAlive.Track(() => joined.IsConnected);
 	}
 
 	// Join dialog list (main thread).
@@ -155,16 +165,6 @@ static class PortMp
 			});
 		}
 		_ui.Call("set_hosts", list);
-	}
-
-	// Hands the joined game's service to PortKeepAlive, which keeps the session running while the app isn't in front.
-	sealed class TrackedConnection(IClientConnectionInitializer inner) : IClientConnectionInitializer
-	{
-		public Task<NetErrorInfo?> Connect(NetClientGameService gameService, System.Threading.CancellationToken cancelToken = default)
-		{
-			PortKeepAlive.Track(() => gameService.IsConnected);
-			return inner.Connect(gameService, cancelToken);
-		}
 	}
 
 	// ---- host ----
@@ -223,7 +223,12 @@ static class PortMp
 				var p = new LobbyPlayer
 				{
 					id = 1001UL + (ulong)slot, slotId = slot, character = character, unlockState = new SerializableUnlockState(),
-					maxMultiplayerAscensionUnlocked = 3 * slot, isReady = slot % 2 == 1,
+#if STS2_V0113
+					maxStandardAscension = 3 * slot, maxBlitzAscension = slot, isRotatingDread = slot % 3 == 0, isModded = false,
+#else
+					maxMultiplayerAscensionUnlocked = 3 * slot,
+#endif
+					isReady = slot % 2 == 1,
 				};
 				writer.Reset();
 				p.Serialize(writer);
@@ -231,9 +236,15 @@ static class PortMp
 				reader.Reset(bytes);
 				var q = new LobbyPlayer();
 				q.Deserialize(reader);
-				if (q.id != p.id || q.slotId != p.slotId || q.maxMultiplayerAscensionUnlocked != p.maxMultiplayerAscensionUnlocked
-					|| q.isReady != p.isReady || q.character != p.character)
-					throw new Exception($"slot {slot} read back as slot {q.slotId}, ascension {q.maxMultiplayerAscensionUnlocked}");
+#if STS2_V0113
+				int pAsc = p.maxStandardAscension, qAsc = q.maxStandardAscension;
+				bool same = q.maxBlitzAscension == p.maxBlitzAscension && q.isRotatingDread == p.isRotatingDread && q.isModded == p.isModded;
+#else
+				int pAsc = p.maxMultiplayerAscensionUnlocked, qAsc = q.maxMultiplayerAscensionUnlocked;
+				bool same = true;
+#endif
+				if (q.id != p.id || q.slotId != p.slotId || qAsc != pAsc || !same || q.isReady != p.isReady || q.character != p.character)
+					throw new Exception($"slot {slot} read back as slot {q.slotId}, ascension {qAsc}");
 				if (slot < 4)
 				{
 					vanilla.Reset();
@@ -241,7 +252,14 @@ static class PortMp
 					vanilla.WriteInt(p.slotId, 2);
 					vanilla.WriteModel(p.character);
 					vanilla.Write(p.unlockState);
+#if STS2_V0113
+					vanilla.WriteInt(p.maxStandardAscension, 8);
+					vanilla.WriteInt(p.maxBlitzAscension, 8);
+					vanilla.WriteBool(p.isRotatingDread);
+					vanilla.WriteBool(p.isModded);
+#else
 					vanilla.WriteInt(p.maxMultiplayerAscensionUnlocked);
+#endif
 					vanilla.WriteBool(p.isReady);
 					if (!vanilla.Buffer.AsSpan(0, vanilla.BytePosition).SequenceEqual(bytes))
 						throw new Exception($"slot {slot} no longer matches the game's own encoding");

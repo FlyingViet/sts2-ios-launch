@@ -14,7 +14,8 @@ project, not affiliated with or endorsed by Mega Crit.
 You need:
 
 - **A Mac** (Apple silicon recommended) with about 15 GB free.
-- **Slay the Spire 2 on Steam**, on the public branch (not a beta). Tested with **v0.107.1**.
+- **Slay the Spire 2 on Steam**, on the public branch: tested with **v0.107.1**. The beta branch's **v0.113.0** works
+  too (see [Playing the beta](#playing-the-beta)).
 - **An iPhone or iPad** on iOS 17 or later, and a cable to connect it to the Mac.
 - **An Apple ID.** A free one works (see [Keeping it working](#keeping-it-working)).
 
@@ -140,6 +141,16 @@ your saves (or skip that).
 
 Tested on an iPhone 16 Pro Max running iOS 27.
 
+## Playing the beta
+
+To play the beta (v0.113.0: the Fool, Blitz and Dread), switch Slay the Spire 2 to `public-beta` in Steam
+(Properties → Game Versions & Betas), let it update, copy the game files again and rebuild. The beta's new lobbies
+(Blitz and Dread) get the same 6-player hosting as standard and custom runs.
+
+Your saves follow you: Steam Cloud saves are shared by both branches, and the beta upgrades them to newer save
+formats. The main branch, and builds of this port made from it, then drop what they don't know (beta-only progress
+such as the Fool's unlocks). Play the beta on all your devices at once, or not at all.
+
 ## Script updates
 
 Fixes to the port's scripts (touch input, layout, menus, the multiplayer and Steam Cloud screens) arrive as small
@@ -221,8 +232,9 @@ iPhone Duo (iOS 27.2).
 - **"Permission denied" running `./build.sh`:** run `bash build.sh …` instead.
 - **Folder path with a space in it:** the build goes to `~/Library/Caches/sts2-ios-launch` instead of
   `build/`, because .NET's iOS linker can't handle spaces in paths. The script prints where the result is.
-- **"patching sts2.dll failed":** your game version differs from the one this was made for. Switch Slay the
-  Spire 2 to Steam's public branch (Properties → Betas → None), let it update, and copy the files again.
+- **"patching sts2.dll failed":** your game version differs from the ones this was made for (v0.107.1 on the
+  public branch, v0.113.0 on the beta). Switch Slay the Spire 2 to one of them (Properties → Game Versions &
+  Betas), let it update, and copy the files again.
 - **Signing or provisioning errors:** check your Apple ID is in Xcode → Settings → Accounts, and that your
   device is connected, unlocked and trusted. With a free Apple ID, Apple allows 3 sideloaded apps at a time
   and 10 new app IDs a week.
@@ -230,7 +242,8 @@ iPhone Duo (iOS 27.2).
 - **A game isn't listed in Join:** both devices must be on the same Wi-Fi (guest networks often block devices from
   seeing each other), the host must be on the Multiplayer → Host screen, and Local Network access must be on
   (Settings → Privacy & Security → Local Network). PC hosts are never listed: type their IP.
-- **"Version mismatch" when joining:** everyone needs the same game version from Steam's public branch, and
+- **"Version mismatch" when joining:** everyone needs the same game version (all on the public branch or all on
+  the beta), and
   iOS devices need a build of this repository from after the fix for this (October 8, 2026).
 - **The app's own log:** Files app → On My iPhone → Slay the Spire 2 → `godot.log`.
 

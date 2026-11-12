@@ -262,6 +262,31 @@ else if (asm.Name.Name == "sts2")
 		Instruction.Create(OpCodes.Ldsfld, onHost), Instruction.Create(OpCodes.Ldarg_0),
 		Instruction.Create(OpCodes.Callvirt, Invoke(actionHost, false)));
 
+	// Remember the client service each join creates, so the port can keep the app running while it's connected
+	// (src/native/Port/PortKeepAlive.cs). The game's connection interface changed shape in v0.113.0, so wrapping it
+	// would need a different port build per game version.
+	{
+		var clientService = module.GetType("MegaCrit.Sts2.Core.Multiplayer.NetClientGameService")
+			?? throw new Exception("NetClientGameService not found");
+		var latest = Field("ClientService", clientService);
+		var ctors = clientService.Methods.Where(m => m.IsConstructor && !m.IsStatic && m.HasBody).ToList();
+		if (ctors.Count == 0) throw new Exception("NetClientGameService has no constructor");
+		foreach (var ctor in ctors)
+		{
+			var il = ctor.Body.GetILProcessor();
+			foreach (var ret in ctor.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+			{
+				// Branches to the ret now land on the store.
+				var load = il.Create(OpCodes.Ldarg_0);
+				il.InsertBefore(ret, load);
+				il.InsertBefore(ret, il.Create(OpCodes.Stsfld, latest));
+				foreach (var i in ctor.Body.Instructions.Where(i => i.Operand == ret && i != load)) i.Operand = load;
+			}
+		}
+		patched++;
+		Console.WriteLine($"NetClientGameService constructors set PortHooks.ClientService ({ctors.Count})");
+	}
+
 	// The null platform reports player id 1 (the ENet host's id) even on a joining client, so the end-of-run
 	// progress update would credit the host's character to this device. Report the id this device joined with.
 	var nullPlayerId = Field("NullPlayerId", module.TypeSystem.UInt64);
@@ -329,6 +354,7 @@ else if (asm.Name.Name == "sts2")
 		il.Append(vanilla);
 		il.Emit(OpCodes.Ret);
 		var sites = new List<(MethodDefinition Method, Instruction Four)>();
+		var siteNames = new List<string>();
 		foreach (var t in module.GetTypes().Where(t => !t.FullName.Contains("NMultiplayerTest")))
 			foreach (var m in t.Methods.Where(m => m.HasBody))
 			{
@@ -337,55 +363,70 @@ else if (asm.Name.Name == "sts2")
 					if (list[i].OpCode == OpCodes.Ldc_I4_4 && list[i + 1].Operand is MethodReference r
 						&& (r.Name is "StartENetHost" or "InitializeMultiplayerAsHost" || (r.Name == ".ctor" && r.DeclaringType.Name == "StartRunLobby"))
 						&& r.Parameters.Count > 0 && r.Parameters[^1].ParameterType.MetadataType == MetadataType.Int32)
+					{
 						sites.Add((m, list[i]));
+						siteNames.Add($"{t.Name}.{m.Name} -> {r.DeclaringType.Name}.{r.Name}");
+					}
 			}
 		foreach (var (m, four) in sites)
 			InsertAfter(m, four, Instruction.Create(OpCodes.Call, lanMax));
 		int caps = sites.Count;
-		// StartENetHost x2 (new / loaded run), InitializeMultiplayerAsHost x2 (standard / custom), Daily lobby x1
-		if (caps != 5) throw new Exception($"expected 5 hard-coded host player caps, found {caps}");
+		// StartENetHost x2 (new / loaded run), the Daily lobby x1, and InitializeMultiplayerAsHost per host screen:
+		// standard and custom runs (v0.107.1), plus Blitz and Dread (v0.113.0).
+		int Count(string target) => siteNames.Count(n => n.EndsWith(" -> " + target) || n.EndsWith("." + target));
+		int hostScreens = Count("InitializeMultiplayerAsHost");
+		if (Count("NetHostGameService.StartENetHost") != 2 || Count("StartRunLobby..ctor") != 1 || (hostScreens != 2 && hostScreens != 4)
+				|| caps != 3 + hostScreens)
+			throw new Exception($"unexpected hard-coded host player caps ({caps}): " + string.Join("; ", siteNames));
 		patched++;
 		Console.WriteLine($"host player caps go through PortHooks.LanMaxPlayers ({caps} sites)");
 	}
 
 
-	// LobbyPlayer.slotId goes over the wire in 2 bits (slots 0-3). Slots 4-5 carry their high bit in bit 24 of
-	// maxMultiplayerAscensionUnlocked (an ascension level, 0-20), so slots 0-3 serialize exactly as before and a PC
-	// (which can host for iOS but never join an iOS host) sees the same bytes.
+	// The lobby player's slotId goes over the wire in 2 bits (slots 0-3). Slots 4-5 carry their high bit in an unused
+	// bit of an ascension level (0-20) that's sent next to it, so slots 0-3 serialize exactly as before and a PC (which
+	// can host for iOS but never join an iOS host) sees the same bytes. v0.107.1: LobbyPlayer, 32-bit
+	// maxMultiplayerAscensionUnlocked, bit 24. v0.113.0: StartRunLobbyPlayer, 8-bit maxStandardAscension, bit 7.
 	{
-		var lp = module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.LobbyPlayer");
+		var lp = module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.LobbyPlayer")
+			?? module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer")
+			?? throw new Exception("lobby player type not found");
 		var slot = lp.Fields.Single(f => f.Name == "slotId");
-		var asc = lp.Fields.Single(f => f.Name == "maxMultiplayerAscensionUnlocked");
+		var asc = lp.Fields.SingleOrDefault(f => f.Name == "maxMultiplayerAscensionUnlocked")
+			?? lp.Fields.Single(f => f.Name == "maxStandardAscension");
+		bool wide = asc.Name == "maxMultiplayerAscensionUnlocked";
+		sbyte bit = wide ? (sbyte)24 : (sbyte)7;
+		int mask = wide ? 0xFFFFFF : 0x7F;
 		Instruction Load(MethodDefinition m, FieldDefinition f) =>
 			m.Body.Instructions.Single(i => i.OpCode == OpCodes.Ldfld && i.Operand == f);
 
 		var ser = Method(lp.FullName, "Serialize");
 		// writer.WriteInt(slotId & 3, 2)
 		InsertAfter(ser, Load(ser, slot), Instruction.Create(OpCodes.Ldc_I4_3), Instruction.Create(OpCodes.And));
-		// writer.WriteInt(maxMultiplayerAscensionUnlocked | (slotId >> 2) << 24)
+		// writer.WriteInt(ascension | (slotId >> 2) << bit)
 		InsertAfter(ser, Load(ser, asc),
 			Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ldfld, slot),
 			Instruction.Create(OpCodes.Ldc_I4_2), Instruction.Create(OpCodes.Shr),
-			Instruction.Create(OpCodes.Ldc_I4_S, (sbyte)24), Instruction.Create(OpCodes.Shl),
+			Instruction.Create(OpCodes.Ldc_I4_S, bit), Instruction.Create(OpCodes.Shl),
 			Instruction.Create(OpCodes.Or));
 
 		var de = Method(lp.FullName, "Deserialize");
 		var storeAsc = de.Body.Instructions.Single(i => i.OpCode == OpCodes.Stfld && i.Operand == asc);
 		InsertAfter(de, storeAsc,
-			// slotId |= (maxMultiplayerAscensionUnlocked >> 24) << 2
+			// slotId |= (ascension >> bit) << 2
 			Instruction.Create(OpCodes.Ldarg_0),
 			Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ldfld, slot),
 			Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ldfld, asc),
-			Instruction.Create(OpCodes.Ldc_I4_S, (sbyte)24), Instruction.Create(OpCodes.Shr),
+			Instruction.Create(OpCodes.Ldc_I4_S, bit), Instruction.Create(OpCodes.Shr),
 			Instruction.Create(OpCodes.Ldc_I4_2), Instruction.Create(OpCodes.Shl),
 			Instruction.Create(OpCodes.Or), Instruction.Create(OpCodes.Stfld, slot),
-			// maxMultiplayerAscensionUnlocked &= 0xFFFFFF
+			// ascension &= mask
 			Instruction.Create(OpCodes.Ldarg_0),
 			Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ldfld, asc),
-			Instruction.Create(OpCodes.Ldc_I4, 0xFFFFFF), Instruction.Create(OpCodes.And),
+			Instruction.Create(OpCodes.Ldc_I4, mask), Instruction.Create(OpCodes.And),
 			Instruction.Create(OpCodes.Stfld, asc));
 		patched += 2;
-		Console.WriteLine("LobbyPlayer slots 4-5 carry their high bit in maxMultiplayerAscensionUnlocked");
+		Console.WriteLine($"{lp.Name} slots 4-5 carry their high bit in bit {bit} of {asc.Name}");
 	}
 
 	// The rest site scene has four character seats and the treasure room four multiplayer relic holders (one relic
@@ -409,7 +450,16 @@ else if (asm.Name.Name == "sts2")
 	{
 		var coll = module.GetType("MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NTreasureRoomRelicCollection");
 		var ready = Method(coll.FullName, "_Ready");
-		var set = ready.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand is MethodReference r && r.Name == "set_SingleplayerRelicHolder");
+		var set = ready.Body.Instructions.SingleOrDefault(i => i.OpCode == OpCodes.Call && i.Operand is MethodReference r && r.Name == "set_SingleplayerRelicHolder");
+		if (set == null && coll.Fields.Any(f => f.Name == "_holderLayouts"))
+		{
+			// v0.113.0: the scene has a layout per relic count, up to 6, so players 5 and 6 need nothing extra.
+			// The hook stays (unused) because src/native sets it.
+			Field("TreasureRelicHolders", Generic("Action", coll.Fields.Single(f => f.Name == "_relicContainer").FieldType));
+			Console.WriteLine("treasure room has its own layouts for up to 6 relics");
+			goto treasureDone;
+		}
+		if (set == null) throw new Exception("NTreasureRoomRelicCollection._Ready changed");
 		// Next: "ldloc.0; GetChildren()" collects the multiplayer holders from the "Container" node held in local 0.
 		if (set.Next.OpCode != OpCodes.Ldloc_0) throw new Exception("NTreasureRoomRelicCollection._Ready changed");
 		var act = Generic("Action", ready.Body.Variables[0].VariableType);
@@ -421,6 +471,7 @@ else if (asm.Name.Name == "sts2")
 		patched++;
 		Console.WriteLine("NTreasureRoomRelicCollection._Ready calls PortHooks.TreasureRelicHolders before collecting holders");
 	}
+	treasureDone:
 
 	// Network error popups offer only "Report bug" (a feedback form sent to Mega Crit) for errors like timeouts,
 	// with no way to just close them. An unofficial port shouldn't file reports: always show OK.
@@ -551,4 +602,9 @@ else
 
 asm.Write(args[1]);
 Console.WriteLine($"{patched} patches -> {args[1]}");
+// Game API generation for src/native (build.sh passes it as a compile-time symbol): v0.113.0 renamed the lobby
+// player type and moved the profile save path into a method.
+string api = module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer") != null ? "STS2_V0113" : "STS2_V0107";
+File.WriteAllText(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1]))!, "game-api.txt"), api);
+Console.WriteLine("game API: " + api);
 return 0;
