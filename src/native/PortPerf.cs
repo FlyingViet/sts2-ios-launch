@@ -76,6 +76,7 @@ static unsafe class PortPerf
 		if (NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "port_metal_compile_ms", out IntPtr metalMs))
 			_metalMs = (delegate* unmanaged<double>)metalMs;
 		GD.Print("[PORT] metal: ", NativeStatus("port_metal_status"));
+		GD.Print("[PORT] nearby (Wi-Fi Aware): ", PortMultiplayer.PortNearby.Status);
 		var rd = RenderingServer.GetRenderingDevice();
 		string Fmt(RenderingDevice.DataFormat f) => rd != null && rd.TextureIsFormatSupportedForUsage(f, RenderingDevice.TextureUsageBits.SamplingBit) ? "yes" : "no";
 		GD.Print("[PERF] gpu=", rd?.GetDeviceName(), " bc1=", Fmt(RenderingDevice.DataFormat.Bc1RgbaUnormBlock),

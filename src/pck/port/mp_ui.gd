@@ -5,8 +5,10 @@ extends CanvasLayer
 signal join_submitted(ip: String)
 signal cancelled
 signal banner_action
+signal pair_requested
 
 const GOLD := Color(0.95, 0.82, 0.45)
+const ERROR_COLOR := Color(1.0, 0.6, 0.5)
 
 var _font: Font
 var _font_bold: Font
@@ -16,6 +18,10 @@ var _error: Label
 var _ip: LineEdit
 var _hosts_box: VBoxContainer
 var _hosts_status: Label
+var _hosts_title: Label
+var _nearby_row: HBoxContainer
+var _nearby_label: Label
+var _nearby := false
 var _banner: PanelContainer
 var _banner_label: Label
 var _banner_button: Button
@@ -86,16 +92,16 @@ func _init() -> void:
 		cancelled.emit()))
 	row.add_child(_button("Join", _submit))
 	_error = Label.new()
-	_error.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
+	_error.add_theme_color_override("font_color", ERROR_COLOR)
 	col.add_child(_error)
 	# Games found on the network (set_hosts); below the field so the keyboard never covers it.
-	var hosts_title := Label.new()
-	hosts_title.text = "Games on your Wi-Fi"
-	hosts_title.add_theme_font_size_override("font_size", 30)
-	hosts_title.add_theme_color_override("font_color", GOLD)
+	_hosts_title = Label.new()
+	_hosts_title.text = "Games on your Wi-Fi"
+	_hosts_title.add_theme_font_size_override("font_size", 30)
+	_hosts_title.add_theme_color_override("font_color", GOLD)
 	if _font_bold != null:
-		hosts_title.add_theme_font_override("font", _font_bold)
-	col.add_child(hosts_title)
+		_hosts_title.add_theme_font_override("font", _font_bold)
+	col.add_child(_hosts_title)
 	_hosts_box = VBoxContainer.new()
 	_hosts_box.add_theme_constant_override("separation", 10)
 	col.add_child(_hosts_box)
@@ -104,6 +110,20 @@ func _init() -> void:
 	_hosts_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hosts_status.custom_minimum_size = Vector2(1120, 0)
 	col.add_child(_hosts_status)
+	# Wi-Fi Aware (set_nearby): phones in the same room play without a Wi-Fi network once paired.
+	_nearby_row = HBoxContainer.new()
+	_nearby_row.add_theme_constant_override("separation", 18)
+	_nearby_label = Label.new()
+	_nearby_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nearby_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nearby_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_nearby_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
+	_nearby_row.add_child(_nearby_label)
+	_nearby_row.add_child(_button("Pair a phone", func():
+		DisplayServer.virtual_keyboard_hide()
+		pair_requested.emit()))
+	_nearby_row.visible = false
+	col.add_child(_nearby_row)
 	set_hosts([])
 	_dialog.visible = false
 
@@ -168,6 +188,7 @@ func _submit() -> void:
 
 func show_join(ip: String, error: String) -> void:
 	_ip.text = ip
+	_error.add_theme_color_override("font_color", ERROR_COLOR)
 	_error.text = error
 	_error.visible = error != ""
 	_dialog.visible = true
@@ -188,8 +209,29 @@ func set_hosts(hosts: Array) -> void:
 		if b.disabled:
 			b.modulate = Color(1, 1, 1, 0.5)
 		_hosts_box.add_child(b)
-	_hosts_status.text = "Looking for games… The host needs Multiplayer > Host open, on the same Wi-Fi."
+	if _nearby:
+		_hosts_status.text = "Looking for games… The host needs Multiplayer > Host open, nearby or on the same Wi-Fi."
+	else:
+		_hosts_status.text = "Looking for games… The host needs Multiplayer > Host open, on the same Wi-Fi."
 	_hosts_status.visible = hosts.is_empty()
+
+
+## A progress line where errors go (e.g. "Connecting to …"), in a neutral color.
+func show_note(text: String) -> void:
+	_error.add_theme_color_override("font_color", Color(1, 1, 1, 0.8))
+	_error.text = text
+	_error.visible = text != ""
+
+
+## supported: this phone can play nearby over Wi-Fi Aware (aot/Port/PortNearby.cs); paired: phones paired with it.
+func set_nearby(supported: bool, paired: int) -> void:
+	_nearby = supported
+	_nearby_row.visible = supported
+	_hosts_title.text = "Games nearby and on your Wi-Fi" if supported else "Games on your Wi-Fi"
+	if paired == 0:
+		_nearby_label.text = "In the same room with no Wi-Fi? Pair your phones once, then the host's game shows up here."
+	else:
+		_nearby_label.text = "Paired phones that host show up here, even without Wi-Fi. Pair another phone:"
 
 
 func close_join() -> void:

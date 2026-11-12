@@ -44,6 +44,11 @@ static class PortMp
 	static Node? _ui;
 	static TaskCompletionSource<(string Kind, string Arg)>? _choice;
 	static int _hostGeneration;
+	// Join dialog lists: games found on the Wi-Fi (PortDiscovery) and paired phones hosting nearby (PortNearby).
+	static List<PortDiscovery.Host> _lanHosts = new();
+	static List<(ulong Id, string Name)> _nearbyHosts = new();
+	static int _browseGeneration;
+	const string NearbyPrefix = "nearby:";
 
 	[ModuleInitializer]
 	internal static void Init()
@@ -100,8 +105,20 @@ static class PortMp
 		PokeLocalNetwork(wifi); // brings up iOS's Local Network prompt while the IP is being typed
 		string error = "";
 		var ui = EnsureUi();
+		_lanHosts = new();
+		_nearbyHosts = new();
 		ui.Call("set_hosts", new Godot.Collections.Array());
 		PortDiscovery.Start(recent.Append(ip), hosts => Callable.From(() => ShowHosts(hosts)).CallDeferred());
+		bool nearby = PortNearby.Supported;
+		string nearbyName = "";
+		int browse = ++_browseGeneration;
+		ui.Call("set_nearby", nearby, PortNearby.PairedCount);
+		if (nearby)
+		{
+			PortNearby.Browse(true);
+			_ = PollNearbyHosts(browse);
+		}
+		nearby = false; // from here on: whether the chosen game is a nearby one
 		try
 		{
 			while (true)
@@ -116,7 +133,14 @@ static class PortMp
 					back?.EmitSignal("Released", back);
 					return;
 				}
-				ip = arg.Trim();
+				string choice = arg.Trim();
+				if (choice.StartsWith(NearbyPrefix, StringComparison.Ordinal))
+				{
+					(nearby, nearbyName, error) = await ConnectNearby(choice);
+					if (nearby) break;
+					continue;
+				}
+				ip = choice;
 				if (Ipv4.IsMatch(ip) && IPAddress.TryParse(ip, out _)) break;
 				error = "That isn't an IP address. It looks like 192.168.1.20.";
 			}
@@ -124,14 +148,24 @@ static class PortMp
 		finally
 		{
 			PortDiscovery.Stop();
+			_browseGeneration++;
+			PortNearby.Browse(false);
 		}
-		cfg.SetValue("mp", "last_ip", ip);
-		cfg.SetValue("mp", "recent_ips", new[] { ip }.Concat(recent.Where(r => r != ip)).Take(6).ToArray());
-		cfg.Save(ConfigPath);
+		if (nearby)
+		{
+			ip = "127.0.0.1"; // the relay to the nearby host (src/ios/nearby_play.swift)
+		}
+		else
+		{
+			cfg.SetValue("mp", "last_ip", ip);
+			cfg.SetValue("mp", "recent_ips", new[] { ip }.Concat(recent.Where(r => r != ip)).Take(6).ToArray());
+			cfg.Save(ConfigPath);
+		}
 		CloseUi();
 		ulong id = ClientId();
 		PortHooks.NullPlayerId = id;
-		Log($"joining {ip}:{Port} as player {id} (this device: {wifi ?? "no Wi-Fi"}{(tailscale != null ? ", Tailscale " + tailscale : "")})");
+		Log(nearby ? $"joining {nearbyName} nearby over Wi-Fi Aware as player {id} ({PortNearby.Status})"
+			: $"joining {ip}:{Port} as player {id} (this device: {wifi ?? "no Wi-Fi"}{(tailscale != null ? ", Tailscale " + tailscale : "")})");
 		await PortNames.StartClient(ip, id);
 		var previous = PortHooks.ClientService;
 		var join = screen.JoinGameAsync(new ENetClientConnectionInitializer(id, ip, Port));
@@ -141,15 +175,92 @@ static class PortMp
 		await join;
 		var joined = PortHooks.ClientService;
 		if (joined != null && joined != previous && joined != tracked) PortKeepAlive.Track(() => joined.IsConnected);
+		if (nearby) _ = CloseNearbyWhenDone(joined ?? tracked);
+	}
+
+	// ---- nearby (Wi-Fi Aware, src/native/Port/PortNearby.cs) ----
+
+	static SignalAwaiter Wait(double seconds)
+	{
+		var tree = (SceneTree)Engine.GetMainLoop();
+		return tree.ToSignal(tree.CreateTimer(seconds, true, false, true), SceneTreeTimer.SignalName.Timeout);
+	}
+
+	// Refreshes the nearby games in the join dialog while it's open.
+	static async Task PollNearbyHosts(int generation)
+	{
+		while (generation == _browseGeneration)
+		{
+			var hosts = PortNearby.Hosts();
+			if (!hosts.SequenceEqual(_nearbyHosts))
+			{
+				_nearbyHosts = hosts;
+				RenderHosts();
+			}
+			if (_ui != null && GodotObject.IsInstanceValid(_ui)) _ui.Call("set_nearby", true, PortNearby.PairedCount);
+			await Wait(0.5);
+		}
+	}
+
+	// Opens the Wi-Fi Aware relay to a nearby host. Returns whether it's ready, the host's name, and an error to show.
+	static async Task<(bool Ok, string Name, string Error)> ConnectNearby(string choice)
+	{
+		ulong.TryParse(choice.AsSpan(NearbyPrefix.Length), out ulong device);
+		string name = _nearbyHosts.FirstOrDefault(h => h.Id == device).Name ?? "the other phone";
+		EnsureUi().Call("show_note", $"Connecting to {name}…");
+		PortNearby.Join(device);
+		for (int i = 0; i < 100; i++) // 20 s
+		{
+			int state = PortNearby.JoinState;
+			if (state == 2) return (true, name, "");
+			if (state != 1) break;
+			await Wait(0.2);
+		}
+		string why = PortNearby.Status;
+		PortNearby.Leave();
+		Log($"nearby: couldn't connect to {name} ({why})");
+		return (false, name, $"Couldn't connect to {name}. Keep the phones close, check it's still hosting, and try again.");
+	}
+
+	// Closes the relay once the game has left the nearby host's session.
+	static async Task CloseNearbyWhenDone(NetClientGameService? service)
+	{
+		while (PortNearby.JoinState == 2 && service != null && service.IsConnected) await Wait(2);
+		Log($"nearby: left the host's game ({PortNearby.Status})");
+		PortNearby.Leave();
+	}
+
+	// Offers this phone's game to paired phones nearby until it stops hosting.
+	static async Task OfferNearby(NetHostGameService service, int generation)
+	{
+		PortNearby.Host(true);
+		Log($"nearby: hosting for paired phones ({PortNearby.Status})");
+		while (generation == _hostGeneration && service.IsConnected) await Wait(1);
+		if (generation == _hostGeneration) PortNearby.Host(false); // a newer host keeps offering
+		Log($"nearby: stopped hosting ({PortNearby.Status})");
 	}
 
 	// Join dialog list (main thread).
 	static void ShowHosts(List<PortDiscovery.Host> hosts)
 	{
+		_lanHosts = hosts;
+		RenderHosts();
+	}
+
+	static void RenderHosts()
+	{
 		if (_ui == null || !GodotObject.IsInstanceValid(_ui)) return;
 		string mine = PortNames.GameVersion;
 		var list = new Godot.Collections.Array();
-		foreach (var h in hosts)
+		foreach (var (id, name) in _nearbyHosts)
+			list.Add(new Godot.Collections.Dictionary
+			{
+				["ip"] = NearbyPrefix + id,
+				["title"] = $"{name}, nearby",
+				["detail"] = "Wi-Fi Aware: no Wi-Fi network needed",
+				["joinable"] = true,
+			});
+		foreach (var h in _lanHosts)
 		{
 			bool sameVersion = h.Version == "" || mine == "" || h.Version == mine;
 			string detail = !sameVersion ? $"different game version ({h.Version}, you have {mine})"
@@ -176,6 +287,7 @@ static class PortMp
 		PortKeepAlive.Track(() => service.IsConnected);
 		int generation = ++_hostGeneration;
 		_ = HostBannerLoop(service, generation);
+		if (PortNearby.Supported) _ = OfferNearby(service, generation);
 	}
 
 	static async Task HostBannerLoop(NetHostGameService service, int generation)
@@ -188,6 +300,8 @@ static class PortMp
 		if (wifi != null) where.Add(wifi);
 		if (tailscale != null) where.Add($"{tailscale} (Tailscale)");
 		string address = where.Count > 0 ? string.Join(" or ", where) : "this device's IP address";
+		bool nearby = PortNearby.Supported;
+		if (nearby) address += " or nearby";
 		Log($"hosting on {address}, port {Port}");
 		// The lobby (character select) is part of the main menu; hide once the run starts or hosting stops.
 		bool previewed = false;
@@ -195,7 +309,7 @@ static class PortMp
 		{
 			int players = service.ConnectedPeers.Count + 1;
 			int cap = PortHooks.LanMaxPlayers(4);
-			EnsureUi().Call("show_banner", $"Hosting · others join at {address} · {players} of {cap} players here");
+			EnsureUi().Call("show_banner", $"Hosting · others join at {address} · {players} of {cap} players here", nearby ? "Pair a phone" : "");
 			if (!previewed) previewed = PreviewLobby(tree);
 			await tree.ToSignal(tree.CreateTimer(1.0, true, false, true), SceneTreeTimer.SignalName.Timeout);
 		}
@@ -387,6 +501,8 @@ static class PortMp
 		_ui = (Node)script.New().AsGodotObject();
 		_ui.Connect("join_submitted", Callable.From<string>(ip => _choice?.TrySetResult(("join", ip))));
 		_ui.Connect("cancelled", Callable.From(() => _choice?.TrySetResult(("cancel", ""))));
+		_ui.Connect("pair_requested", Callable.From(PortNearby.Pair));
+		_ui.Connect("banner_action", Callable.From(PortNearby.Pair)); // the host banner's only button
 		((SceneTree)Engine.GetMainLoop()).Root.CallDeferred(Node.MethodName.AddChild, _ui);
 		return _ui;
 	}

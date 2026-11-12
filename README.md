@@ -122,6 +122,10 @@ your saves (or skip that).
   - **Joining:** Multiplayer → Join. Games hosted by iPhones and iPads on the same Wi-Fi are listed (with the
     host's name and player count): tap one to join. Otherwise enter the host's IP; recent addresses, including
     Tailscale ones, are checked and listed too.
+  - **Nearby, without Wi-Fi** (iOS 26, iPhone 12 or later): phones in the same room play over Wi-Fi Aware, with no
+    router, shared network or IP address. Pair each pair of phones once (**Pair a phone** under Join, or on the
+    host's banner), then the host's game shows up under Join as "*phone*, nearby". Builds signed with a free Apple ID
+    leave this out (Apple doesn't offer Wi-Fi Aware to them). Not yet tested between two phones.
   - **Names:** players see each other's Steam names. Names come from the iOS host, so with a PC host
     they show as "Host" / "Player 123456".
   - **Keeps running when you leave the app:** during a multiplayer game, pulling down Notification Center or

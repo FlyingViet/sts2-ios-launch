@@ -313,7 +313,7 @@ fi
 # Export an empty Godot C# project (named like the game's assembly) as an Xcode project: this provides the stock
 # Godot 4.5.1 iOS engine with FMOD and Spine. The game's code and data are swapped in afterwards.
 X="$WORK/xcode"
-FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION plist-bgaudio-scene" "$TOOLS_ID")"
+FP="$(fingerprint "$ROOT/src/godot" "$ROOT/src/ios" "$WORK/icon.png" "$EXPORT_TEAM $BUNDLE_ID $SHORT_VERSION plist-bgaudio-scene-wifiaware" "$TOOLS_ID")"
 if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 	step "Exporting the Godot iOS project"
 	P="$WORK/proj"; rm -rf "$P" && mkdir -p "$P/addons"
@@ -340,6 +340,14 @@ if ! up_to_date export "$FP" || [[ ! -d "$X/sts2.xcodeproj" ]]; then
 		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneConfigurationName string Default" \
 		-c "Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName string PortSceneDelegate" \
 		"$X/sts2/sts2-Info.plist"
+	# Wi-Fi Aware: multiplayer between phones in the same room (src/ios/nearby_play.swift). A separate call: PlistBuddy
+	# crashes on exit (after saving) when given all of these at once.
+	/usr/libexec/PlistBuddy -c "Add :WiFiAwareServices dict" -c "Add :WiFiAwareServices:_sts2port._tcp dict" \
+		-c "Add :WiFiAwareServices:_sts2port._tcp:Publishable dict" -c "Add :WiFiAwareServices:_sts2port._tcp:Subscribable dict" \
+		"$X/sts2/sts2-Info.plist"
+	/usr/libexec/PlistBuddy -c "Add :com.apple.developer.wifi-aware array" \
+		-c "Add :com.apple.developer.wifi-aware:0 string Publish" -c "Add :com.apple.developer.wifi-aware:1 string Subscribe" \
+		"$X/sts2/sts2.entitlements"
 	# UIBackgroundModes audio: only used during multiplayer, to keep the game running in the background
 	# (src/native/Port/PortKeepAlive.cs); otherwise the app is suspended as usual.
 	# fmod-gdextension's iOS export plugin doesn't generate its plugin loader under Godot 4.5. Ours also swaps the
@@ -455,6 +463,22 @@ metal_hooks() { # <sdk> <min-version flag> -> prints the object's path
 	echo "$o"
 }
 
+# Multiplayer between phones in the same room over Wi-Fi Aware (src/ios/nearby_play.swift). Its API is Swift-only, so
+# it's compiled here and linked in with the Swift libraries' search paths. Its two frameworks are weak-linked (and left
+# out of the object's automatic links): on iOS before 26 the app starts without them and the feature stays off.
+nearby_object() { # <sdk> <target> -> prints the object's path
+	local o="$WORK/nearby_play-$1-$(fingerprint "$ROOT/src/ios/nearby_play.swift" | cut -c1-12).o"
+	if [[ ! -f "$o" ]]; then
+		rm -f "$WORK"/nearby_play-"$1"-*.o
+		run "nearby-$1" xcrun -sdk "$1" swiftc -swift-version 5 -parse-as-library -target "$2" -O -module-name PortNearby \
+			-Xfrontend -disable-autolink-framework -Xfrontend WiFiAware \
+			-Xfrontend -disable-autolink-framework -Xfrontend DeviceDiscoveryUI \
+			-c "$ROOT/src/ios/nearby_play.swift" -o "$o"
+	fi
+	echo "$o"
+}
+NEARBY_LDFLAGS='-L$(SDKROOT)/usr/lib/swift -L$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) -weak_framework WiFiAware -weak_framework DeviceDiscoveryUI'
+
 # ---------------------------------------------------------------------------------------------------- Simulator
 # The same app for the iOS Simulator (Apple silicon). The engine, Spine and FMOD libraries and the NativeAOT game
 # code exist only as arm64 device builds here; arm64 Simulators run that code natively, so a copy of the Xcode
@@ -489,11 +513,11 @@ if [[ $SIM -eq 1 ]]; then
 	run sim-retag python3 "$ROOT/tools/arm64_to_sim.py" "$G"
 	run sim-metal xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=14.0 -fobjc-arc \
 		-c "$ROOT/src/ios/simulator_metal.m" -o "$WORK/simulator_metal.o"
-	HOOKS="$(metal_hooks iphonesimulator -mios-simulator-version-min=14.0)"
+	HOOKS="$(metal_hooks iphonesimulator -mios-simulator-version-min=14.0) $(nearby_object iphonesimulator arm64-apple-ios17.0-simulator)"
 	run xcodebuild-sim xcodebuild -project "$SX/sts2.xcodeproj" -scheme sts2 -configuration Release -sdk iphonesimulator \
 		-destination "generic/platform=iOS Simulator" -derivedDataPath "$WORK/sim-derived" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
 		CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
-		OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $WORK/simulator_metal.o $HOOKS -framework Metal" build
+		OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $WORK/simulator_metal.o $HOOKS -framework Metal $NEARBY_LDFLAGS" build
 	APP="$WORK/sim-derived/Build/Products/Release-iphonesimulator/sts2.app"
 	[[ -d "$APP" ]] || die "no Simulator app built (see $(show "$LOGS/xcodebuild-sim.log"))"
 	C="$APP/.sts2.pck.clone"
@@ -514,18 +538,19 @@ fi
 
 # ---------------------------------------------------------------------------------------------------- app
 step "Building the app with Xcode"
-HOOKS="$(metal_hooks iphoneos -miphoneos-version-min=17.0)"
+HOOKS="$(metal_hooks iphoneos -miphoneos-version-min=17.0) $(nearby_object iphoneos arm64-apple-ios17.0)"
 XB=(xcodebuild -project "$X/sts2.xcodeproj" -scheme sts2 -configuration Release -destination generic/platform=iOS
-	-derivedDataPath "$WORK/derived" OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $HOOKS -framework Metal")
+	-derivedDataPath "$WORK/derived" OTHER_LDFLAGS="-Wl,-U,_fmod_library_init $HOOKS -framework Metal $NEARBY_LDFLAGS")
 if [[ $UNSIGNED -eq 1 ]]; then
 	run xcodebuild "${XB[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
 else
 	XB+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM="$TEAM" build)
 	if ! "${XB[@]}" > "$LOGS/xcodebuild.log" 2>&1; then
-		if grep -qiE "personal development team|increased-memory-limit|Increased Memory Limit" "$LOGS/xcodebuild.log"; then
-			# Free (personal) teams can't use the increased memory limit entitlement.
-			echo "    (your team can't use the increased memory limit; building without it)"
+		if grep -qiE "personal development team|increased-memory-limit|Increased Memory Limit|wifi-aware|Wi-Fi Aware" "$LOGS/xcodebuild.log"; then
+			# Free (personal) teams can't use the increased memory limit or Wi-Fi Aware entitlements.
+			echo "    (your team can't use the increased memory limit or Wi-Fi Aware; building without them)"
 			/usr/libexec/PlistBuddy -c "Delete :com.apple.developer.kernel.increased-memory-limit" "$X/sts2/sts2.entitlements" || true
+			/usr/libexec/PlistBuddy -c "Delete :com.apple.developer.wifi-aware" "$X/sts2/sts2.entitlements" || true
 			run xcodebuild "${XB[@]}"
 		else
 			echo "---- errors from $(show "$LOGS/xcodebuild.log") ----" >&2; grep -E "error:|BUILD FAILED" "$LOGS/xcodebuild.log" | tail -n 20 >&2
