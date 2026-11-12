@@ -27,8 +27,7 @@ On a Windows PC with the game installed, open Steam, right-click **Slay the Spir
 <details>
 <summary>No PC, or the game is installed with Steam for Mac</summary>
 
-- **Steam for Mac:** if the game is installed there, skip this step and leave out `--game` in step 4. (Not
-  yet tested with a Mac install.)
+- **Steam for Mac:** if the game is installed there, skip this step and leave out `--game` in step 4.
 - **No PC (not yet tested):** download the Windows version with Valve's
   [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) and your Steam login, then use `~/sts2-game`
   as your game folder:
