@@ -14,7 +14,7 @@ project, not affiliated with or endorsed by Mega Crit.
 You need:
 
 - **A Mac** (Apple silicon recommended) with about 15 GB free.
-- **Slay the Spire 2 on Steam**, on the public branch: tested with **v0.107.1**. The beta branch's **v0.113.0** works
+- **Slay the Spire 2 on Steam**, on the public branch: tested with **v0.107.1**. The beta branch's **v0.113.1** works
   too (see [Playing the beta](#playing-the-beta)).
 - **An iPhone or iPad** on iOS 17 or later, and a cable to connect it to the Mac.
 - **An Apple ID.** A free one works (see [Keeping it working](#keeping-it-working)).
@@ -147,7 +147,7 @@ Tested on an iPhone 16 Pro Max running iOS 27.
 
 ## Playing the beta
 
-To play the beta (v0.113.0: the Fool, Blitz and Dread), switch Slay the Spire 2 to `public-beta` in Steam
+To play the beta (v0.113.1: the Fool, Blitz and Dread), switch Slay the Spire 2 to `public-beta` in Steam
 (Properties → Game Versions & Betas), let it update, copy the game files again and rebuild. The beta's new lobbies
 (Blitz and Dread) get the same 6-player hosting as standard and custom runs.
 
@@ -237,7 +237,7 @@ iPhone Duo (iOS 27.2).
 - **Folder path with a space in it:** the build goes to `~/Library/Caches/sts2-ios-launch` instead of
   `build/`, because .NET's iOS linker can't handle spaces in paths. The script prints where the result is.
 - **"patching sts2.dll failed":** your game version differs from the ones this was made for (v0.107.1 on the
-  public branch, v0.113.0 on the beta). Switch Slay the Spire 2 to one of them (Properties → Game Versions &
+  public branch, v0.113.1 on the beta). Switch Slay the Spire 2 to one of them (Properties → Game Versions &
   Betas), let it update, and copy the files again.
 - **Signing or provisioning errors:** check your Apple ID is in Xcode → Settings → Accounts, and that your
   device is connected, unlocked and trusted. With a free Apple ID, Apple allows 3 sideloaded apps at a time
