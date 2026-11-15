@@ -70,9 +70,9 @@ Replace `/path/to/Slay the Spire 2` with the folder from step 1. The easiest way
 window, and press Return.
 
 This one command does everything: it downloads the build tools, patches your copy of the game for iOS,
-compiles it, and installs the app on your phone. The first run downloads about 2 GB and takes roughly 5–15
-minutes. If something is wrong (no Apple ID in Xcode, wrong folder, phone not connected), it stops and tells you
-what to fix.
+compiles it, and installs the app on your phone. The first run downloads about 2 GB and takes roughly 10–30
+minutes, most of it compiling Godot's iOS engine (only the first time). If something is wrong (no Apple ID in
+Xcode, wrong folder, phone not connected), it stops and tells you what to fix.
 
 No Git? Click **Code** → **Download ZIP** on this page, unzip it, and `cd` into that folder instead of running
 `git clone`.
@@ -267,8 +267,12 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
 (`sts2.dll`) don't depend on the platform, so the build assembles them into an iOS app:
 
 1. **Engine:** exports an empty Godot 4.5.1 C# project ([`src/godot`](src/godot)) for iOS. That produces an
-   Xcode project with the stock iOS engine and the FMOD and Spine extensions the game uses. Spine's iOS library
-   is rebuilt from its 4.2 source with [`src/spine/no-gpu-readback.patch`](src/spine/no-gpu-readback.patch):
+   Xcode project with Godot's iOS engine and the FMOD and Spine extensions the game uses. The engine library is
+   compiled from Godot 4.5.1's source with
+   [`src/engine/threaded-load-race.patch`](src/engine/threaded-load-race.patch), a backport of Godot 4.7's fix
+   for background loading ([godot#118085](https://github.com/godotengine/godot/issues/118085)): stock 4.5.1 can
+   load a file on two threads at once, which corrupts memory and crashes the game minutes later. Spine's iOS
+   library is rebuilt from its 4.2 source with [`src/spine/no-gpu-readback.patch`](src/spine/no-gpu-readback.patch):
    the prebuilt one reads each changed character mesh back from the GPU, which froze the game for 30–40 ms on
    attacks and hits.
 2. **Patching:** patches the game's `sts2.dll` with Mono.Cecil ([`src/patcher`](src/patcher)) to add hooks for
@@ -298,7 +302,7 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
 These tools are downloaded from their official sources during the build. None of them are included here:
 
 - [.NET SDK](https://dotnet.microsoft.com)
-- [Godot](https://godotengine.org)
+- [Godot](https://godotengine.org) (the editor and export template, and its source for the iOS engine)
 - [GDRE Tools](https://github.com/GDRETools/gdsdecomp)
 - [fmod-gdextension](https://github.com/utopia-rise/fmod-gdextension), which includes FMOD, under
   [FMOD's license](https://www.fmod.com/licensing)
