@@ -138,6 +138,11 @@ your saves (or skip that).
 - **120 FPS by default** on ProMotion iPhones (the game's default is 60); change it in Settings → FPS. To save
   battery and heat, the screen drops to 60 Hz after 2 seconds without touches or animations, and returns to 120 the
   moment you touch it or something moves.
+- **Combat backgrounds drawn at the resolution of their art** (1 pixel per game unit, e.g. 1680×1182 on an open
+  iPhone Duo) and scaled up to the screen, while creatures, cards and text stay at full resolution. The art has
+  about 0.74 texels per unit, so no detail is lost, and the background takes the GPU less than half as long. This
+  matters most in the Underdocks and its bosses, whose backgrounds stack around 20 full-screen shader overlays
+  and as many screen-sized glows: those fights dropped to 35–60 fps on an open iPhone Duo.
 - Sound and music through FMOD (they follow the silent switch).
 - **Extra custom-run modifiers** (singleplayer only), at the bottom of Singleplayer → Custom → modifiers:
   - **Supercharged:** 20 extra Energy every turn.
@@ -289,6 +294,8 @@ The game is made with Godot (Mega Crit's fork of Godot 4.5) and C#. Its data (`S
 4. **Data:** adds the port's settings and scripts ([`src/pck`](src/pck)) to a copy of the game's `.pck`:
    - touch input
    - display and safe-area layout
+   - combat backgrounds rendered at their art's resolution in a second viewport
+     ([`src/pck/port/background_res.gd`](src/pck/port/background_res.gd))
    - the Steam Cloud screens
    - the multiplayer join and host screens
    - your copy's `release_info.json` (the game version that multiplayer compares)
