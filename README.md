@@ -235,9 +235,13 @@ Godot 4.5's iOS runtime doesn't use the UIScene app lifecycle, which apps built 
 (they're stopped at launch otherwise) and which the Duo needs to resize apps. The build adds it
 ([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
 
-The game stays landscape in every pose. A real iPhone Duo can still resize it to the upright outer screen while
-it's in the background (folded and held upright in another app); the game then asks iOS to turn it back to landscape
-([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)).
+The game stays landscape in every pose. A real iPhone Duo can still turn it upright (folding, opening, or folded and
+held upright in another app): like an iPad, it can ignore an app's orientation list. So on the Duo the game also locks
+its orientation while it's landscape (iOS 26's `prefersInterfaceOrientationLocked`). Folded, turning the phone to the
+other landscape side still turns the game round; open, it stays the way round it opened. If it ever ends up upright
+it unlocks and asks iOS to turn it back to landscape
+([`src/ios/scene_delegate.cpp`](src/ios/scene_delegate.cpp)). `godot.log` records each change as
+`[PORT] orientation`. Phones without a hinge rely on Info.plist alone, as before.
 
 Tested in the iPhone Duo Simulator (`--simulator`) closed, half open and open, both ways round, and played on a real
 iPhone Duo (iOS 27.2).
