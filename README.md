@@ -125,7 +125,14 @@ your saves (or skip that).
   - **Nearby, without Wi-Fi** (iOS 26, iPhone 12 or later): phones in the same room play over Wi-Fi Aware, with no
     router, shared network or IP address. Pair each pair of phones once (**Pair a phone** under Join, or on the
     host's banner), then the host's game shows up under Join as "*phone*, nearby". Builds signed with a free Apple ID
-    leave this out (Apple doesn't offer Wi-Fi Aware to them). Not yet tested between two phones.
+    leave this out (Apple doesn't offer Wi-Fi Aware to them).
+    - **Drops:** if the link drops (too far apart, walls, the other phone busy on its Wi-Fi network), the joining
+      phone reconnects by itself and the game carries on after a pause; it gives up after about 20 seconds. Both
+      phones need a build with this (an older build on either phone still plays, but can't reconnect). Reconnecting
+      is not yet tested between two phones. Keeping the phones close helps, and so does leaving the Wi-Fi network
+      while keeping Wi-Fi on, so the radio doesn't share its time with the network.
+    - **If a game ends anyway:** the host opens the pause menu → Save and Quit, then Multiplayer → Host from Save,
+      and the others join again (the game only lets players who were in the run rejoin it).
   - **Names:** players see each other's Steam names. Names come from the iOS host, so with a PC host
     they show as "Host" / "Player 123456".
   - **Keeps running when you leave the app:** during a multiplayer game, pulling down Notification Center or
