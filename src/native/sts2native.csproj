@@ -5,7 +5,7 @@
       GameDataDir  folder with the game's managed DLLs (data_sts2_*)
       PatchedDir   folder with patched GodotSharp.dll + sts2.dll
       IosSdkPath   iPhoneOS.sdk of the Xcode used for the app build
-      GameApi      compile-time symbol for the game's API generation (STS2_V0107 or STS2_V0113; src/patcher)
+      GameApi      compile-time symbol for the game's API generation (STS2_V0107, STS2_V0111 or STS2_V0113; src/patcher)
   -->
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>

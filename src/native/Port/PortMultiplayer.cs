@@ -21,7 +21,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Unlocks;
 using MegaCrit.Sts2.Port;
-#if STS2_V0113
+#if STS2_V0113 || STS2_V0111
 using LobbyPlayer = MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer;
 #endif
 
