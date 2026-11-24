@@ -136,7 +136,7 @@ sealed class PortCloudStore : ICloudSaveStore
 			var abs = Abs(rel);
 			if (File.Exists(abs)) result[rel] = new DateTimeOffset(File.GetLastWriteTimeUtc(abs)).ToUnixTimeSeconds();
 		}
-#if STS2_V0113
+#if STS2_V0113 || STS2_V0111
 		Add(ProfileSaveManager.GetProfileSavePath(false)); // unmodded: "profile.save", as before
 #else
 		Add(ProfileSaveManager.ProfilePath);

@@ -482,14 +482,23 @@ else if (asm.Name.Name == "sts2")
 			goto treasureDone;
 		}
 		if (set == null) throw new Exception("NTreasureRoomRelicCollection._Ready changed");
-		// Next: "ldloc.0; GetChildren()" collects the multiplayer holders from the "Container" node held in local 0.
-		if (set.Next.OpCode != OpCodes.Ldloc_0) throw new Exception("NTreasureRoomRelicCollection._Ready changed");
-		var act = Generic("Action", ready.Body.Variables[0].VariableType);
+		// The multiplayer holders are collected from the container, held in a local in v0.107 or a field in v0.111.
+		var containerField = coll.Fields.SingleOrDefault(f => f.Name == "_relicContainer");
+		bool fieldContainer = set.Next.OpCode == OpCodes.Ldarg_0 && set.Next.Next.OpCode == OpCodes.Ldfld
+			&& containerField != null && set.Next.Next.Operand is FieldReference fr && fr.Name == containerField.Name;
+		if (!fieldContainer && set.Next.OpCode != OpCodes.Ldloc_0) throw new Exception("NTreasureRoomRelicCollection._Ready changed");
+		var act = Generic("Action", fieldContainer ? containerField.FieldType : ready.Body.Variables[0].VariableType);
 		var hook = Field("TreasureRelicHolders", act);
-		InsertAfter(ready, set,
-			Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Brfalse, set.Next),
-			Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Ldloc_0),
-			Instruction.Create(OpCodes.Callvirt, Invoke(act, false)));
+		if (fieldContainer)
+			InsertAfter(ready, set,
+				Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Brfalse, set.Next),
+				Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Ldarg_0),
+				Instruction.Create(OpCodes.Ldfld, containerField), Instruction.Create(OpCodes.Callvirt, Invoke(act, false)));
+		else
+			InsertAfter(ready, set,
+				Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Brfalse, set.Next),
+				Instruction.Create(OpCodes.Ldsfld, hook), Instruction.Create(OpCodes.Ldloc_0),
+				Instruction.Create(OpCodes.Callvirt, Invoke(act, false)));
 		patched++;
 		Console.WriteLine("NTreasureRoomRelicCollection._Ready calls PortHooks.TreasureRelicHolders before collecting holders");
 	}
@@ -624,9 +633,9 @@ else
 
 asm.Write(args[1]);
 Console.WriteLine($"{patched} patches -> {args[1]}");
-// Game API generation for src/native (build.sh passes it as a compile-time symbol): v0.113.0 renamed the lobby
-// player type and moved the profile save path into a method.
-string api = module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer") != null ? "STS2_V0113" : "STS2_V0107";
+// v0.111 uses the newer lobby type and profile path API but retains the earlier lobby serialization fields.
+var modernLobby = module.GetType("MegaCrit.Sts2.Core.Entities.Multiplayer.StartRunLobbyPlayer");
+string api = modernLobby == null ? "STS2_V0107" : modernLobby.Fields.Any(f => f.Name == "maxStandardAscension") ? "STS2_V0113" : "STS2_V0111";
 File.WriteAllText(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1]))!, "game-api.txt"), api);
 Console.WriteLine("game API: " + api);
 return 0;
